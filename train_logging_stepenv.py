@@ -10,12 +10,14 @@ import time
 import json
 import dmc2gym
 import copy
+from tqdm import tqdm
 
 import utils
 from logger import Logger
 from video import VideoRecorder
 
 from agent.sac_ae import SacAeAgent
+
 
 
 def parse_args():
@@ -68,6 +70,7 @@ def parse_args():
     # misc
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--work_dir', default='.', type=str)
+    parser.add_argument('--exp', default='exp', type=str)
     parser.add_argument('--save_tb', default=False, action='store_true')
     parser.add_argument('--save_model', default=False, action='store_true')
     parser.add_argument('--save_buffer', default=False, action='store_true')
@@ -153,7 +156,7 @@ def main():
     if args.encoder_type == 'pixel':
         env = utils.FrameStack(env, k=args.frame_stack)
 
-    utils.make_logdir(args.work_dir)
+    utils.make_logdir(args)
     video_dir = utils.make_dir(os.path.join(args.work_dir, 'video'))
     model_dir = utils.make_dir(os.path.join(args.work_dir, 'model'))
     buffer_dir = utils.make_dir(os.path.join(args.work_dir, 'buffer'))
@@ -189,7 +192,7 @@ def main():
     episode, episode_reward, done = 0, 0, True
     eval_freq = int(args.eval_freq / args.action_repeat)    # Freq compatible with environment steps
     start_time = time.time()
-    for step in range(args.num_train_steps + 1):
+    for step in tqdm(range(args.num_train_steps + 1)):
         if done:
             if step > 0:
                 L.log('train/duration', time.time() - start_time, step)
