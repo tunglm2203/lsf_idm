@@ -1,0 +1,19 @@
+name: sac_baselines
+channels:
+  - defaults
+dependencies:
+  - python=3.6
+  - pytorch
+  - torchvision
+  - cudatoolkit=9.2
+  - absl-py
+  - pyparsing
+  - pillow=6.1
+  - pip:
+    - termcolor
+    - git+git://github.com/deepmind/dm_control.git
+    - git+git://github.com/denisyarats/dmc2gym.git
+    - tb-nightly
+    - imageio
+    - imageio-ffmpeg
+    - scikit-image

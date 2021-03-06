@@ -1,0 +1,8 @@
+tmp/
+logs/
+logs_dmc/
+*.npy
+*.npz
+*.ipynb
+.idea/
+__pycache__/
