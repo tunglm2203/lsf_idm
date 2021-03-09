@@ -98,7 +98,7 @@ class PixelEncoder(nn.Module):
 
 
 class IdentityEncoder(nn.Module):
-    def __init__(self, obs_shape, feature_dim, num_layers, num_filters):
+    def __init__(self, obs_shape, feature_dim, num_layers, num_filters, *args):
         super().__init__()
 
         assert len(obs_shape) == 1
