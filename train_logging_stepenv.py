@@ -29,6 +29,10 @@ def parse_args():
     parser.add_argument('--image_size', default=84, type=int)
     parser.add_argument('--action_repeat', default=1, type=int)
     parser.add_argument('--frame_stack', default=3, type=int)
+
+    parser.add_argument('--pre_transform_image_size', default=100, type=int)
+    parser.add_argument('--detach_encoder', default=False, action='store_true')
+
     # replay buffer
     parser.add_argument('--replay_buffer_capacity', default=1000000, type=int)
     # train
@@ -78,11 +82,12 @@ def parse_args():
     parser.add_argument('--save_buffer', default=False, action='store_true')
     parser.add_argument('--save_video', default=False, action='store_true')
 
+    parser.add_argument('--log_interval', default=100, type=int)
     args = parser.parse_args()
     return args
 
 
-def evaluate(env, agent, video, num_episodes, L, step):
+def evaluate(env, agent, video, num_episodes, L, step, args):
     all_ep_rewards = []
     for i in range(num_episodes):
         obs = env.reset()
@@ -90,6 +95,9 @@ def evaluate(env, agent, video, num_episodes, L, step):
         done = False
         episode_reward = 0
         while not done:
+            if args.agent == 'sac_curl' and args.encoder_type == 'pixel':
+                obs = utils.center_crop_image(obs, args.image_size) # Preprocess input for CURL
+
             with utils.eval_mode(agent):
                 action = agent.select_action(obs)
             obs, reward, done, _ = env.step(action)
@@ -166,8 +174,55 @@ def make_agent(obs_shape, action_shape, args, device):
             num_filters=args.num_filters,
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
-            curl_latent_dim=args.curl_latent_dim
+        )
+    else:
+        assert 'agent is not supported: %s' % args.agent
 
+
+def make_env(args):
+    if args.agent == 'sac_ae':
+        return dmc2gym.make(
+            domain_name=args.domain_name,
+            task_name=args.task_name,
+            seed=args.seed,
+            visualize_reward=False,
+            from_pixels=(args.encoder_type == 'pixel'),
+            height=args.image_size,
+            width=args.image_size,
+            frame_skip=args.action_repeat
+        )
+    elif args.agent == 'sac_curl':
+        return dmc2gym.make(
+            domain_name=args.domain_name,
+            task_name=args.task_name,
+            seed=args.seed,
+            visualize_reward=False,
+            from_pixels=(args.encoder_type == 'pixel'),
+            height=args.pre_transform_image_size,
+            width=args.pre_transform_image_size,
+            frame_skip=args.action_repeat
+        )
+    else:
+        assert 'agent is not supported: %s' % args.agent
+
+
+def make_replaybuffer(args, env, device=torch.device('cpu'), pre_aug_obs_shape=100):
+    if args.agent == 'sac_ae':
+        return utils.ReplayBuffer(
+            obs_shape=env.observation_space.shape,
+            action_shape=env.action_space.shape,
+            capacity=args.replay_buffer_capacity,
+            batch_size=args.batch_size,
+            device=device
+        )
+    elif args.agent == 'sac_curl':
+        return utils.CurlReplayBuffer(
+            obs_shape=pre_aug_obs_shape,
+            action_shape=env.action_space.shape,
+            capacity=args.replay_buffer_capacity,
+            batch_size=args.batch_size,
+            device=device,
+            image_size=args.image_size,
         )
     else:
         assert 'agent is not supported: %s' % args.agent
@@ -179,16 +234,7 @@ def main():
         args.__dict__["seed"] = np.random.randint(1, 1000000)
     utils.set_seed_everywhere(args.seed)
 
-    env = dmc2gym.make(
-        domain_name=args.domain_name,
-        task_name=args.task_name,
-        seed=args.seed,
-        visualize_reward=False,
-        from_pixels=(args.encoder_type == 'pixel'),
-        height=args.image_size,
-        width=args.image_size,
-        frame_skip=args.action_repeat
-    )
+    env = make_env(args)
     env.seed(args.seed)
 
     # stack several consecutive frames together
@@ -211,16 +257,17 @@ def main():
     assert env.action_space.low.min() >= -1
     assert env.action_space.high.max() <= 1
 
-    replay_buffer = utils.ReplayBuffer(
-        obs_shape=env.observation_space.shape,
-        action_shape=env.action_space.shape,
-        capacity=args.replay_buffer_capacity,
-        batch_size=args.batch_size,
-        device=device
-    )
+    if args.agent == 'sac_curl' and args.encoder_type == 'pixel':
+        obs_shape = (3 * args.frame_stack, args.image_size, args.image_size)
+        pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
+    else:
+        obs_shape = env.observation_space.shape
+        pre_aug_obs_shape = env.observation_space.shape
+
+    replay_buffer = make_replaybuffer(args, env, device, pre_aug_obs_shape)
 
     agent = make_agent(
-        obs_shape=env.observation_space.shape,
+        obs_shape=obs_shape,
         action_shape=env.action_space.shape,
         args=args,
         device=device
@@ -231,6 +278,7 @@ def main():
     if args.num_train_envsteps != -1:
         # Override N training step if args.num_train_envsteps is given
         args.num_train_steps = int(args.num_train_envsteps / args.action_repeat)
+
     episode, episode_reward, done = 0, 0, True
     eval_freq = int(args.eval_freq / args.action_repeat)    # Freq compatible with environment steps
     start_time = time.time()
@@ -247,7 +295,7 @@ def main():
                                                            args.exp,
                                                            args.seed))
                 L.log('eval/episode', episode, step)
-                evaluate(env, agent, video, args.num_eval_episodes, L, step)
+                evaluate(env, agent, video, args.num_eval_episodes, L, step, args)
                 if args.save_model:
                     agent.save(model_dir, step)
                 if args.save_buffer:
