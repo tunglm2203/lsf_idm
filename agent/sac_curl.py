@@ -189,7 +189,7 @@ class CURL(nn.Module):
     CURL
     """
 
-    def __init__(self, obs_shape, z_dim, batch_size, critic, critic_target,
+    def __init__(self, obs_shape, z_dim, critic, critic_target,
                  output_type="continuous"):
         super(CURL, self).__init__()
 
@@ -261,7 +261,6 @@ class SacCurlAgent(object):
             cpc_update_freq=1,
             log_interval=100,
             detach_encoder=False,
-            curl_latent_dim=128
     ):
         self.device = device
         self.discount = discount
@@ -272,7 +271,6 @@ class SacCurlAgent(object):
         self.cpc_update_freq = cpc_update_freq
         self.log_interval = log_interval
         self.image_size = obs_shape[-1]
-        self.curl_latent_dim = curl_latent_dim
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
 
@@ -318,7 +316,7 @@ class SacCurlAgent(object):
         if self.encoder_type == 'pixel':
             # create CURL encoder (the 128 batch size is probably unnecessary)
             self.CURL = CURL(obs_shape, encoder_feature_dim,
-                             self.curl_latent_dim, self.critic, self.critic_target,
+                             self.critic, self.critic_target,
                              output_type='continuous').to(self.device)
 
             # optimizer for critic encoder for reconstruction loss
