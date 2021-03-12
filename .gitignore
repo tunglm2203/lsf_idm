@@ -6,3 +6,4 @@ logs_dmc/
 *.ipynb
 .idea/
 __pycache__/
+scripts/*.sh
