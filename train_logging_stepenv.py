@@ -19,7 +19,7 @@ from video import VideoRecorder
 from agent.sac_ae import SacAeAgent
 from agent.sac_curl import SacCurlAgent
 from agent.sac_rad import SacRadAgent
-
+from agent.sac_cpm import SacCPMAgent
 
 
 def parse_args():
@@ -93,9 +93,9 @@ def parse_args():
 def evaluate(env, agent, video, num_episodes, L, step, args):
 
     def preprocess_obs(obs):
-        if args.agent == 'sac_curl' and args.encoder_type == 'pixel':
+        if args.agent in ['sac_curl', 'sac_cpm']:
             preprocessed = utils.center_crop_image(obs, args.image_size)  # Preprocess input for CURL
-        elif args.agent == 'sac_rad' and args.encoder_type == 'pixel':
+        elif args.agent == ['sac_rad']:
             # center crop image
             if 'crop' in args.data_augs:
                 obs = utils.center_crop_image(obs, args.image_size)
@@ -135,7 +135,7 @@ def evaluate(env, agent, video, num_episodes, L, step, args):
 
 
 def make_agent(obs_shape, action_shape, args, device):
-    if args.agent == 'sac_ae':
+    if args.agent in ['sac_ae']:
         return SacAeAgent(
             obs_shape=obs_shape,
             action_shape=action_shape,
@@ -166,7 +166,7 @@ def make_agent(obs_shape, action_shape, args, device):
             num_layers=args.num_layers,
             num_filters=args.num_filters
         )
-    elif args.agent == 'sac_curl':
+    elif args.agent in ['sac_curl']:
         return SacCurlAgent(
             obs_shape=obs_shape,
             action_shape=action_shape,
@@ -194,7 +194,35 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
         )
-    elif args.agent == 'sac_rad':
+    elif args.agent in ['sac_cpm']:
+        return SacCPMAgent(
+            obs_shape=obs_shape,
+            action_shape=action_shape,
+            device=device,
+            hidden_dim=args.hidden_dim,
+            discount=args.discount,
+            init_temperature=args.init_temperature,
+            alpha_lr=args.alpha_lr,
+            alpha_beta=args.alpha_beta,
+            actor_lr=args.actor_lr,
+            actor_beta=args.actor_beta,
+            actor_log_std_min=args.actor_log_std_min,
+            actor_log_std_max=args.actor_log_std_max,
+            actor_update_freq=args.actor_update_freq,
+            critic_lr=args.critic_lr,
+            critic_beta=args.critic_beta,
+            critic_tau=args.critic_tau,
+            critic_target_update_freq=args.critic_target_update_freq,
+            encoder_type=args.encoder_type,
+            encoder_feature_dim=args.encoder_feature_dim,
+            encoder_lr=args.encoder_lr,
+            encoder_tau=args.encoder_tau,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters,
+            log_interval=args.log_interval,
+            detach_encoder=args.detach_encoder,
+        )
+    elif args.agent in ['sac_rad']:
         return SacRadAgent(
             obs_shape=obs_shape,
             action_shape=action_shape,
@@ -239,7 +267,7 @@ def make_env(args, **kwargs):
             width=args.image_size,
             frame_skip=args.action_repeat
         )
-    elif args.agent in ['sac_curl']:
+    elif args.agent in ['sac_curl', 'sac_cpm']:
         assert args.encoder_type == 'pixel', 'If you use state, please use `sac_ae` agent.'
         return dmc2gym.make(
             domain_name=args.domain_name,
@@ -277,7 +305,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu'), pre_aug_obs_shape=1
             batch_size=args.batch_size,
             device=device
         )
-    elif args.agent in ['sac_curl']:
+    elif args.agent in ['sac_curl', 'sac_cpm']:
         return utils.CurlReplayBuffer(
             obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
@@ -331,7 +359,7 @@ def main():
     assert env.action_space.high.max() <= 1
 
     # TODO: make it more neat
-    if args.agent in ['sac_curl'] and args.encoder_type == 'pixel':
+    if args.agent in ['sac_curl', 'sac_cpm'] and args.encoder_type == 'pixel':
         obs_shape = (3 * args.frame_stack, args.image_size, args.image_size)
         pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
     elif args.agent in ['sac_rad'] and args.encoder_type == 'pixel':
