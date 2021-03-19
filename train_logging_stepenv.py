@@ -33,9 +33,11 @@ def parse_args():
 
     parser.add_argument('--pre_transform_image_size', default=100, type=int)
     parser.add_argument('--detach_encoder', default=False, action='store_true')
-    # data augs
+    # RAD
     parser.add_argument('--data_augs', default='crop', type=str)
-
+    # CURL/CPM
+    parser.add_argument('--cpc_update_freq', default=1, type=int)
+    parser.add_argument('--idm_update_freq', default=1, type=int)
     # replay buffer
     parser.add_argument('--replay_buffer_capacity', default=1000000, type=int)
     # train
@@ -221,6 +223,8 @@ def make_agent(obs_shape, action_shape, args, device):
             num_filters=args.num_filters,
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
+            cpc_update_freq=args.cpc_update_freq,
+            idm_update_freq=args.idm_update_freq
         )
     elif args.agent in ['sac_rad']:
         return SacRadAgent(

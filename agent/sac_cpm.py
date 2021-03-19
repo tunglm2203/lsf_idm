@@ -302,10 +302,12 @@ class SacCPMAgent(object):
             encoder_type='pixel',
             encoder_feature_dim=50,
             encoder_lr=1e-3,
+            idm_lr=1e-3,
             encoder_tau=0.005,
             num_layers=4,
             num_filters=32,
             cpc_update_freq=1,
+            idm_update_freq=999999999,
             log_interval=100,
             detach_encoder=False,
     ):
@@ -316,6 +318,7 @@ class SacCPMAgent(object):
         self.actor_update_freq = actor_update_freq
         self.critic_target_update_freq = critic_target_update_freq
         self.cpc_update_freq = cpc_update_freq
+        self.idm_update_freq = idm_update_freq
         self.log_interval = log_interval
         self.image_size = obs_shape[-1]
         self.detach_encoder = detach_encoder
@@ -365,6 +368,12 @@ class SacCPMAgent(object):
             self.CURL = CURL(obs_shape, action_shape, encoder_feature_dim,
                              self.critic, self.critic_target, output_type='continuous').to(self.device)
 
+            self.inverse_model = InverseModel(
+                obs_shape, action_shape, hidden_dim, encoder_type,
+                encoder_feature_dim, actor_log_std_min, actor_log_std_max,
+                num_layers, num_filters
+            ).to(device)
+
             # optimizer for critic encoder for reconstruction loss
             self.encoder_optimizer = torch.optim.Adam(
                 self.critic.encoder.parameters(), lr=encoder_lr
@@ -373,7 +382,14 @@ class SacCPMAgent(object):
             self.cpc_optimizer = torch.optim.Adam(
                 self.CURL.parameters(), lr=encoder_lr
             )
+
+            self.idm_optimizer = torch.optim.Adam(
+                self.inverse_model.parameters(), lr=idm_lr
+            )
+
         self.cross_entropy_loss = nn.CrossEntropyLoss()
+
+        self.idm_criterion = nn.L1Loss()
 
         self.train()
         self.critic_target.train()
@@ -384,6 +400,7 @@ class SacCPMAgent(object):
         self.critic.train(training)
         if self.encoder_type == 'pixel':
             self.CURL.train(training)
+            self.inverse_model.train()
 
     @property
     def alpha(self):
@@ -499,7 +516,7 @@ class SacCPMAgent(object):
 
     def update(self, replay_buffer, L, step):
         if self.encoder_type == 'pixel':
-            obs, action, reward, next_obs, not_done, cpc_kwargs = replay_buffer.sample_cpc()
+            obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc()
         else:
             obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
 
@@ -524,7 +541,12 @@ class SacCPMAgent(object):
             )
 
         if step % self.cpc_update_freq == 0 and self.encoder_type == 'pixel':
+            print('[INFO] Training with: CPM-FDM')
             self.update_fdm(obs, next_obs, action, L, step)
+
+        if step % self.idm_update_freq == 0 and self.encoder_type == 'pixel':
+            print('[INFO] Training with: CPM-IDM')
+            self.update_idm(obs, next_obs, action, L, step)
 
     def save(self, model_dir, step):
         torch.save(
