@@ -310,6 +310,7 @@ class SacCPMAgent(object):
             idm_update_freq=999999999,
             log_interval=100,
             detach_encoder=False,
+            no_aug=False,
     ):
         self.device = device
         self.discount = discount
@@ -323,6 +324,7 @@ class SacCPMAgent(object):
         self.image_size = obs_shape[-1]
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
+        self.no_aug = no_aug
 
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,
@@ -516,7 +518,7 @@ class SacCPMAgent(object):
 
     def update(self, replay_buffer, L, step):
         if self.encoder_type == 'pixel':
-            obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc()
+            obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(no_aug=self.no_aug)
         else:
             obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
 

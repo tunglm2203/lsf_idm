@@ -140,7 +140,7 @@ class CurlReplayBuffer(Dataset):
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
         return obses, actions, rewards, next_obses, not_dones
 
-    def sample_cpc(self):
+    def sample_cpc(self, no_aug=False):
 
         start = time.time()
         idxs = np.random.randint(
@@ -151,9 +151,14 @@ class CurlReplayBuffer(Dataset):
         next_obses = self.next_obses[idxs]
         pos = obses.copy()
 
-        obses = random_crop(obses, self.image_size)
-        next_obses = random_crop(next_obses, self.image_size)
-        pos = random_crop(pos, self.image_size)
+        if no_aug:
+            obses = center_crop_images(obses, self.image_size)
+            next_obses = center_crop_images(next_obses, self.image_size)
+            pos = center_crop_images(pos, self.image_size)
+        else:
+            obses = random_crop(obses, self.image_size)
+            next_obses = random_crop(next_obses, self.image_size)
+            pos = random_crop(pos, self.image_size)
 
         obses = torch.as_tensor(obses, device=self.device).float()
         next_obses = torch.as_tensor(
