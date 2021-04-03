@@ -97,7 +97,7 @@ def evaluate(env, agent, video, num_episodes, L, step, args):
     def preprocess_obs(obs):
         if args.agent in ['sac_curl', 'sac_cpm']:
             preprocessed = utils.center_crop_image(obs, args.image_size)  # Preprocess input for CURL
-        elif args.agent == ['sac_rad']:
+        elif args.agent in ['sac_rad']:
             # center crop image
             if 'crop' in args.data_augs:
                 obs = utils.center_crop_image(obs, args.image_size)
