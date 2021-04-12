@@ -185,55 +185,6 @@ class Critic(nn.Module):
             L.log_param('train_critic/q2_fc%d' % i, self.Q2.trunk[i * 2], step)
 
 
-class CURL(nn.Module):
-    """
-    CURL
-    """
-
-    def __init__(self, obs_shape, z_dim, critic, critic_target,
-                 output_type="continuous"):
-        super(CURL, self).__init__()
-
-        self.encoder = critic.encoder
-
-        self.encoder_target = critic_target.encoder
-
-        self.W = nn.Parameter(torch.rand(z_dim, z_dim))
-        self.output_type = output_type
-
-    def encode(self, x, detach=False, ema=False):
-        """
-        Encoder: z_t = e(x_t)
-        :param x: x_t, x y coordinates
-        :return: z_t, value in r2
-        """
-        if ema:
-            with torch.no_grad():
-                z_out = self.encoder_target(x)
-        else:
-            z_out = self.encoder(x)
-
-        if detach:
-            z_out = z_out.detach()
-        return z_out
-
-    # def update_target(self):
-    #    utils.soft_update_params(self.encoder, self.encoder_target, 0.05)
-
-    def compute_logits(self, z_a, z_pos):
-        """
-        Uses logits trick for CURL:
-        - compute (B,B) matrix z_a (W z_pos.T)
-        - positives are all diagonal elements
-        - negatives are all other elements
-        - to compute loss use multiclass cross entropy with identity matrix for labels
-        """
-        Wz = torch.matmul(self.W, z_pos.T)  # (z_dim,B)
-        logits = torch.matmul(z_a, Wz)  # (B,B)
-        logits = logits - torch.max(logits, 1)[0][:, None]
-        return logits
-
-
 class SacRadAgent(object):
     """RAD with SAC."""
 
@@ -338,22 +289,6 @@ class SacRadAgent(object):
             [self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999)
         )
 
-        if self.encoder_type == 'pixel':
-            # create CURL encoder (the 128 batch size is probably unnecessary)
-            self.CURL = CURL(obs_shape, encoder_feature_dim,
-                             self.critic, self.critic_target,
-                             output_type='continuous').to(self.device)
-
-            # optimizer for critic encoder for reconstruction loss
-            self.encoder_optimizer = torch.optim.Adam(
-                self.critic.encoder.parameters(), lr=encoder_lr
-            )
-
-            self.cpc_optimizer = torch.optim.Adam(
-                self.CURL.parameters(), lr=encoder_lr
-            )
-        self.cross_entropy_loss = nn.CrossEntropyLoss()
-
         self.train()
         self.critic_target.train()
 
@@ -361,8 +296,6 @@ class SacRadAgent(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
-        if self.encoder_type == 'pixel':
-            self.CURL.train(training)
 
     @property
     def alpha(self):
@@ -442,31 +375,6 @@ class SacRadAgent(object):
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
 
-    def update_cpc(self, obs_anchor, obs_pos, cpc_kwargs, L, step):
-
-        # time flips
-        """
-        time_pos = cpc_kwargs["time_pos"]
-        time_anchor= cpc_kwargs["time_anchor"]
-        obs_anchor = torch.cat((obs_anchor, time_anchor), 0)
-        obs_pos = torch.cat((obs_anchor, time_pos), 0)
-        """
-        z_a = self.CURL.encode(obs_anchor)
-        z_pos = self.CURL.encode(obs_pos, ema=True)
-
-        logits = self.CURL.compute_logits(z_a, z_pos)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        loss = self.cross_entropy_loss(logits, labels)
-
-        self.encoder_optimizer.zero_grad()
-        self.cpc_optimizer.zero_grad()
-        loss.backward()
-
-        self.encoder_optimizer.step()
-        self.cpc_optimizer.step()
-        if step % self.log_interval == 0:
-            L.log('train/curl_loss', loss, step)
-
     def update(self, replay_buffer, L, step):
         if self.encoder_type == 'pixel':
             obs, action, reward, next_obs, not_done = replay_buffer.sample_rad(self.augs_funcs)
@@ -493,21 +401,12 @@ class SacRadAgent(object):
                 self.encoder_tau
             )
 
-        # if step % self.cpc_update_freq == 0 and self.encoder_type == 'pixel':
-        #    obs_anchor, obs_pos = cpc_kwargs["obs_anchor"], cpc_kwargs["obs_pos"]
-        #    self.update_cpc(obs_anchor, obs_pos,cpc_kwargs, L, step)
-
     def save(self, model_dir, step):
         torch.save(
             self.actor.state_dict(), '%s/actor_%s.pt' % (model_dir, step)
         )
         torch.save(
             self.critic.state_dict(), '%s/critic_%s.pt' % (model_dir, step)
-        )
-
-    def save_curl(self, model_dir, step):
-        torch.save(
-            self.CURL.state_dict(), '%s/curl_%s.pt' % (model_dir, step)
         )
 
     def load(self, model_dir, step):
