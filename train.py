@@ -21,6 +21,7 @@ from agent.sac_curl import SacCurlAgent
 from agent.sac_rad import SacRadAgent
 from agent.sac_cpm import SacCPMAgent
 from agent.sac_pr import SacPrAgent
+from agent.sac_drq import SacDrqAgent
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -30,6 +31,13 @@ def parse_args():
     parser.add_argument('--image_size', default=84, type=int)
     parser.add_argument('--action_repeat', default=1, type=int)
     parser.add_argument('--frame_stack', default=3, type=int)
+    # Distractor environment
+    parser.add_argument('--difficulty', default='easy', type=str, choices=['easy', 'medium', 'hard'])
+    parser.add_argument('--bg_dataset_path', default='/home/tung/workspace/rlbench/DAVIS/JPEGImages/480p/', type=str)
+    parser.add_argument('--bg_dynamic', action='store_true')
+    parser.add_argument('--rand_bg', action='store_true')
+    parser.add_argument('--rand_cam', action='store_true')
+    parser.add_argument('--rand_color', action='store_true')
 
     parser.add_argument('--pre_transform_image_size', default=100, type=int)
     parser.add_argument('--detach_encoder', default=False, action='store_true')
@@ -284,15 +292,44 @@ def make_agent(obs_shape, action_shape, args, device):
             num_filters=args.num_filters,
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
+            data_augs=args.data_augs,
             transition_model_type='deterministic',
             use_prior=args.use_prior
+        )
+    elif args.agent in ['sac_drq']:
+        return SacDrqAgent(
+            obs_shape=obs_shape,
+            action_shape=action_shape,
+            device=device,
+            hidden_dim=args.hidden_dim,
+            discount=args.discount,
+            init_temperature=args.init_temperature,
+            alpha_lr=args.alpha_lr,
+            alpha_beta=args.alpha_beta,
+            actor_lr=args.actor_lr,
+            actor_beta=args.actor_beta,
+            actor_log_std_min=args.actor_log_std_min,
+            actor_log_std_max=args.actor_log_std_max,
+            actor_update_freq=args.actor_update_freq,
+            critic_lr=args.critic_lr,
+            critic_beta=args.critic_beta,
+            critic_tau=args.critic_tau,
+            critic_target_update_freq=args.critic_target_update_freq,
+            encoder_type=args.encoder_type,
+            encoder_feature_dim=args.encoder_feature_dim,
+            encoder_lr=args.encoder_lr,
+            encoder_tau=args.encoder_tau,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters,
+            log_interval=args.log_interval,
+            detach_encoder=args.detach_encoder,
         )
     else:
         assert 'agent is not supported: %s' % args.agent
 
 
-def make_env(args, **kwargs):
-    if args.agent in ['sac_ae']:
+def make_env(args, mode='train', **kwargs):
+    if args.agent in ['sac_ae', 'sac_drq']:
         return dmc2gym.make(
             domain_name=args.domain_name,
             task_name=args.task_name,
@@ -301,7 +338,14 @@ def make_env(args, **kwargs):
             from_pixels=(args.encoder_type == 'pixel'),
             height=args.image_size,
             width=args.image_size,
-            frame_skip=args.action_repeat
+            frame_skip=args.action_repeat,
+            difficulty=args.difficulty,
+            background_dataset_path=args.bg_dataset_path,
+            background_dataset_videos=mode,
+            dynamic=args.bg_dynamic,
+            default_background=not args.rand_bg,
+            default_camera=not args.rand_cam,
+            default_color=not args.rand_color,
         )
     elif args.agent in ['sac_curl', 'sac_cpm']:
         assert args.encoder_type == 'pixel', 'If you use state, please use `sac_ae` agent.'
@@ -313,7 +357,14 @@ def make_env(args, **kwargs):
             from_pixels=(args.encoder_type == 'pixel'),
             height=args.pre_transform_image_size,
             width=args.pre_transform_image_size,
-            frame_skip=args.action_repeat
+            frame_skip=args.action_repeat,
+            difficulty=args.difficulty,
+            background_dataset_path=args.bg_dataset_path,
+            background_dataset_videos=mode,
+            dynamic=args.bg_dynamic,
+            default_background=not args.rand_bg,
+            default_camera=not args.rand_cam,
+            default_color=not args.rand_color,
         )
     elif args.agent in ['sac_rad', 'sac_pr']:
         assert args.encoder_type == 'pixel', 'If you use state, please use `sac_ae` agent.'
@@ -326,7 +377,14 @@ def make_env(args, **kwargs):
             from_pixels=(args.encoder_type == 'pixel'),
             height=pre_transform_image_size,
             width=pre_transform_image_size,
-            frame_skip=args.action_repeat
+            frame_skip=args.action_repeat,
+            difficulty=args.difficulty,
+            background_dataset_path=args.bg_dataset_path,
+            background_dataset_videos=mode,
+            dynamic=args.bg_dynamic,
+            default_background=not args.rand_bg,
+            default_camera=not args.rand_cam,
+            default_color=not args.rand_color,
         )
     else:
         assert 'agent is not supported: %s' % args.agent
@@ -361,6 +419,15 @@ def make_replaybuffer(args, env, device=torch.device('cpu'), pre_aug_obs_shape=1
             image_size=args.image_size,
             pre_image_size=pre_image_size,
         )
+    elif args.agent in ['sac_drq']:
+        return utils.DrQReplayBuffer(
+            obs_shape=env.observation_space.shape,
+            action_shape=env.action_space.shape,
+            capacity=args.replay_buffer_capacity,
+            batch_size=args.batch_size,
+            image_pad=4,
+            device=device,
+        )
     else:
         assert 'agent is not supported: %s' % args.agent
 
@@ -371,12 +438,15 @@ def main():
         args.__dict__["seed"] = np.random.randint(1, 1000000)
     utils.set_seed_everywhere(args.seed)
 
-    env = make_env(args)
+    env = make_env(args, mode='train')
     env.seed(args.seed)
+    eval_env = make_env(args, mode='train')
+    eval_env.seed(args.seed)
 
     # stack several consecutive frames together
     if args.encoder_type == 'pixel':
         env = utils.FrameStack(env, k=args.frame_stack)
+        eval_env = utils.FrameStack(eval_env, k=args.frame_stack)
 
     utils.make_logdir(args)
     video_dir = utils.make_dir(os.path.join(args.work_dir, 'video'))
@@ -437,7 +507,7 @@ def main():
                                                            args.exp,
                                                            args.seed))
                 L.log('eval/episode', episode, step)
-                evaluate(env, agent, video, args.num_eval_episodes, L, step, args)
+                evaluate(eval_env, agent, video, args.num_eval_episodes, L, step, args)
                 if args.save_model:
                     agent.save(model_dir, step)
                 if args.save_buffer:
