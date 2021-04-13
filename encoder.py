@@ -16,11 +16,13 @@ OUT_DIM_64 = {2: 29, 4: 25, 6: 21}
 
 class PixelEncoder(nn.Module):
     """Convolutional encoder of pixels observations."""
-    def __init__(self, obs_shape, feature_dim, num_layers=2, num_filters=32, output_logits=False):
+    def __init__(self, obs_shape, feature_dim, num_layers=2, num_filters=32, output_logits=False,
+                 log_image=False):
         super().__init__()
 
         assert len(obs_shape) == 3
 
+        self.log_image = log_image
         self.feature_dim = feature_dim
         self.num_layers = num_layers
 
@@ -89,7 +91,7 @@ class PixelEncoder(nn.Module):
 
         for k, v in self.outputs.items():
             L.log_histogram('train_encoder/%s_hist' % k, v, step)
-            if len(v.shape) > 2:
+            if self.log_image and len(v.shape) > 2:
                 L.log_image('train_encoder/%s_img' % k, v[0], step)
 
         for i in range(self.num_layers):
