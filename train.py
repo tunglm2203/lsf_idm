@@ -84,6 +84,7 @@ def parse_args():
     parser.add_argument('--num_layers', default=4, type=int)
     parser.add_argument('--num_filters', default=32, type=int)
     # sac
+    parser.add_argument('--n_grad_updates', default=1, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
     parser.add_argument('--init_temperature', default=0.1, type=float)
     parser.add_argument('--alpha_lr', default=1e-4, type=float)
@@ -534,7 +535,7 @@ def main():
 
         # run training update
         if step >= args.init_steps:
-            num_updates = args.init_steps if step == args.init_steps else 1
+            num_updates = args.init_steps if step == args.init_steps else args.n_grad_updates
             for _ in range(num_updates):
                 agent.update(replay_buffer, L, step)
 
