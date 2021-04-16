@@ -325,6 +325,7 @@ class SacCPMAgent(object):
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
         self.no_aug = no_aug
+        print('[INFO] Use augmentation: ', str(self.no_aug))
 
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,

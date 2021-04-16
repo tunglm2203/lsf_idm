@@ -46,6 +46,7 @@ def parse_args():
     # CURL/CPM
     parser.add_argument('--cpc_update_freq', default=1, type=int)
     parser.add_argument('--idm_update_freq', default=1, type=int)
+    parser.add_argument('--cpm_noaug', action='store_true', default=False)
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -235,7 +236,8 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
             cpc_update_freq=args.cpc_update_freq,
-            idm_update_freq=args.idm_update_freq
+            idm_update_freq=args.idm_update_freq,
+            no_aug=args.cpm_noaug
         )
     elif args.agent in ['sac_rad']:
         return SacRadAgent(
