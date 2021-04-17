@@ -20,7 +20,6 @@ from agent.sac_ae import SacAeAgent
 from agent.sac_curl import SacCurlAgent
 from agent.sac_rad import SacRadAgent
 from agent.sac_cpm import SacCPMAgent
-from agent.sac_pr import SacPrAgent
 from agent.sac_drq import SacDrqAgent
 
 def parse_args():
@@ -109,7 +108,7 @@ def evaluate(env, agent, video, num_episodes, L, step, args):
     def preprocess_obs(obs):
         if args.agent in ['sac_curl', 'sac_cpm']:
             preprocessed = utils.center_crop_image(obs, args.image_size)  # Preprocess input for CURL
-        elif args.agent in ['sac_rad', 'sac_pr']:
+        elif args.agent in ['sac_rad']:
             # center crop image
             if 'crop' in args.data_augs:
                 obs = utils.center_crop_image(obs, args.image_size)
@@ -268,37 +267,6 @@ def make_agent(obs_shape, action_shape, args, device):
             detach_encoder=args.detach_encoder,
             data_augs=args.data_augs
         )
-    elif args.agent in ['sac_pr']:
-        return SacPrAgent(
-            obs_shape=obs_shape,
-            action_shape=action_shape,
-            device=device,
-            hidden_dim=args.hidden_dim,
-            discount=args.discount,
-            init_temperature=args.init_temperature,
-            alpha_lr=args.alpha_lr,
-            alpha_beta=args.alpha_beta,
-            actor_lr=args.actor_lr,
-            actor_beta=args.actor_beta,
-            actor_log_std_min=args.actor_log_std_min,
-            actor_log_std_max=args.actor_log_std_max,
-            actor_update_freq=args.actor_update_freq,
-            critic_lr=args.critic_lr,
-            critic_beta=args.critic_beta,
-            critic_tau=args.critic_tau,
-            critic_target_update_freq=args.critic_target_update_freq,
-            encoder_type=args.encoder_type,
-            encoder_feature_dim=args.encoder_feature_dim,
-            encoder_lr=args.encoder_lr,
-            encoder_tau=args.encoder_tau,
-            num_layers=args.num_layers,
-            num_filters=args.num_filters,
-            log_interval=args.log_interval,
-            detach_encoder=args.detach_encoder,
-            data_augs=args.data_augs,
-            transition_model_type='deterministic',
-            use_prior=args.use_prior
-        )
     elif args.agent in ['sac_drq']:
         return SacDrqAgent(
             obs_shape=obs_shape,
@@ -332,68 +300,57 @@ def make_agent(obs_shape, action_shape, args, device):
 
 
 def make_env(args, mode='train', **kwargs):
+    env_args = dict(
+        domain_name=args.domain_name,
+        task_name=args.task_name,
+        seed=args.seed,
+        visualize_reward=False,
+        from_pixels=(args.encoder_type == 'pixel'),
+        height=args.image_size,
+        width=args.image_size,
+        frame_skip=args.action_repeat,
+        difficulty=args.difficulty,
+        background_dataset_path=args.bg_dataset_path,
+        background_dataset_videos=mode,
+        dynamic=args.bg_dynamic,
+        default_background=not args.rand_bg,
+        default_camera=not args.rand_cam,
+        default_color=not args.rand_color,
+    )
+
+    if args.encoder_type == 'identity':
+        assert args.agent == 'sac_ae', 'If you use state, please use `sac_ae` agent.'
+
     if args.agent in ['sac_ae', 'sac_drq']:
-        return dmc2gym.make(
-            domain_name=args.domain_name,
-            task_name=args.task_name,
-            seed=args.seed,
-            visualize_reward=False,
-            from_pixels=(args.encoder_type == 'pixel'),
+        env_args.update(
             height=args.image_size,
             width=args.image_size,
-            frame_skip=args.action_repeat,
-            difficulty=args.difficulty,
-            background_dataset_path=args.bg_dataset_path,
-            background_dataset_videos=mode,
-            dynamic=args.bg_dynamic,
-            default_background=not args.rand_bg,
-            default_camera=not args.rand_cam,
-            default_color=not args.rand_color,
         )
     elif args.agent in ['sac_curl', 'sac_cpm']:
-        assert args.encoder_type == 'pixel', 'If you use state, please use `sac_ae` agent.'
-        return dmc2gym.make(
-            domain_name=args.domain_name,
-            task_name=args.task_name,
-            seed=args.seed,
-            visualize_reward=False,
-            from_pixels=(args.encoder_type == 'pixel'),
+        env_args.update(
             height=args.pre_transform_image_size,
             width=args.pre_transform_image_size,
-            frame_skip=args.action_repeat,
-            difficulty=args.difficulty,
-            background_dataset_path=args.bg_dataset_path,
-            background_dataset_videos=mode,
-            dynamic=args.bg_dynamic,
-            default_background=not args.rand_bg,
-            default_camera=not args.rand_cam,
-            default_color=not args.rand_color,
         )
-    elif args.agent in ['sac_rad', 'sac_pr']:
-        assert args.encoder_type == 'pixel', 'If you use state, please use `sac_ae` agent.'
+    elif args.agent in ['sac_rad']:
         pre_transform_image_size = args.pre_transform_image_size if 'crop' in args.data_augs else args.image_size
-        return dmc2gym.make(
-            domain_name=args.domain_name,
-            task_name=args.task_name,
-            seed=args.seed,
-            visualize_reward=False,
-            from_pixels=(args.encoder_type == 'pixel'),
+        env_args.update(
             height=pre_transform_image_size,
             width=pre_transform_image_size,
-            frame_skip=args.action_repeat,
-            difficulty=args.difficulty,
-            background_dataset_path=args.bg_dataset_path,
-            background_dataset_videos=mode,
-            dynamic=args.bg_dynamic,
-            default_background=not args.rand_bg,
-            default_camera=not args.rand_cam,
-            default_color=not args.rand_color,
         )
     else:
         assert 'agent is not supported: %s' % args.agent
+    return dmc2gym.make(**env_args)
 
 
-def make_replaybuffer(args, env, device=torch.device('cpu'), pre_aug_obs_shape=100):
+def make_replaybuffer(args, env, device=torch.device('cpu')):
+    pre_aug_obs_shape = None
+    if args.encoder_type == 'pixel':
+        if args.agent in ['sac_curl', 'sac_cpm']:
+            pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
+        elif args.agent in ['sac_rad']:
+            pre_transform_image_size = args.pre_transform_image_size if 'crop' in args.data_augs else args.image_size
+            pre_aug_obs_shape = (3 * args.frame_stack, pre_transform_image_size, pre_transform_image_size)
+
     if args.agent in ['sac_ae']:
         return utils.ReplayBuffer(
             obs_shape=env.observation_space.shape,
@@ -408,19 +365,19 @@ def make_replaybuffer(args, env, device=torch.device('cpu'), pre_aug_obs_shape=1
             action_shape=env.action_space.shape,
             capacity=args.replay_buffer_capacity,
             batch_size=args.batch_size,
-            device=device,
             image_size=args.image_size,
+            device=device,
         )
-    elif args.agent in ['sac_rad', 'sac_pr']:
+    elif args.agent in ['sac_rad']:
         pre_image_size = args.pre_transform_image_size  # record the pre transform image size for translation
         return utils.RadReplayBuffer(
             obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
             capacity=args.replay_buffer_capacity,
             batch_size=args.batch_size,
-            device=device,
             image_size=args.image_size,
             pre_image_size=pre_image_size,
+            device=device,
         )
     elif args.agent in ['sac_drq']:
         return utils.DrQReplayBuffer(
@@ -467,19 +424,19 @@ def main():
     assert env.action_space.low.min() >= -1
     assert env.action_space.high.max() <= 1
 
-    # TODO: make it more neat
-    if args.agent in ['sac_curl', 'sac_cpm'] and args.encoder_type == 'pixel':
+    if args.encoder_type == 'pixel':
         obs_shape = (3 * args.frame_stack, args.image_size, args.image_size)
-        pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
-    elif args.agent in ['sac_rad', 'sac_pr'] and args.encoder_type == 'pixel':
-        pre_transform_image_size = args.pre_transform_image_size if 'crop' in args.data_augs else args.image_size
-        obs_shape = (3 * args.frame_stack, args.image_size, args.image_size)
-        pre_aug_obs_shape = (3 * args.frame_stack, pre_transform_image_size, pre_transform_image_size)
-    else:
+    elif args.encoder_type == 'identity':
         obs_shape = env.observation_space.shape
-        pre_aug_obs_shape = env.observation_space.shape
+    else:
+        obs_shape = None
+        assert 'Encoder is not supported: %s' % args.encoder_type
 
-    replay_buffer = make_replaybuffer(args, env, device, pre_aug_obs_shape)
+    replay_buffer = make_replaybuffer(
+        env=env,
+        args=args,
+        device=device
+    )
 
     agent = make_agent(
         obs_shape=obs_shape,
