@@ -192,6 +192,7 @@ class ForwardModel(nn.Module):
     def __init__(self, obs_shape, action_shape, z_dim, critic, critic_target, hidden_dim):
         super(ForwardModel, self).__init__()
 
+        self.hidden_dim = self.encoder.feature_dim
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
 
@@ -201,9 +202,9 @@ class ForwardModel(nn.Module):
         )
 
         self.foward_predictor = nn.Sequential(
-            nn.Linear(self.encoder.feature_dim * 2, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, self.encoder.feature_dim),
+            nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
         )
 
         self.W = nn.Parameter(torch.rand(z_dim, z_dim))
@@ -253,6 +254,7 @@ class BackwardModel(nn.Module):
     def __init__(self, obs_shape, action_shape, z_dim, critic, critic_target, hidden_dim):
         super(BackwardModel, self).__init__()
 
+        self.hidden_dim = 50
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
 
@@ -262,9 +264,9 @@ class BackwardModel(nn.Module):
         )
 
         self.backward_predictor = nn.Sequential(
-            nn.Linear(self.encoder.feature_dim * 2, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, self.encoder.feature_dim),
+            nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.encoder.feature_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
         )
 
         self.W = nn.Parameter(torch.rand(z_dim, z_dim))
@@ -312,12 +314,13 @@ class InverseModel(nn.Module):
     ):
         super(InverseModel, self).__init__()
 
+        self.hidden_dim = 50
         self.encoder = critic.encoder
 
         self.inverse_predictor = nn.Sequential(
-            nn.Linear(self.encoder.feature_dim * 2, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-            nn.Linear(hidden_dim, action_shape[0]), nn.Tanh()
+            nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, action_shape[0]), nn.Tanh()
         )
 
         self.apply(weight_init)
