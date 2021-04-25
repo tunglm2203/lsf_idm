@@ -376,6 +376,7 @@ class SacCPMAgent(object):
                 encoder_feature_dim, actor_log_std_min, actor_log_std_max,
                 num_layers, num_filters
             ).to(device)
+            self.inverse_model.encoder.copy_conv_weights_from(self.critic.encoder)
 
             # optimizer for critic encoder for reconstruction loss
             self.encoder_optimizer = torch.optim.Adam(
