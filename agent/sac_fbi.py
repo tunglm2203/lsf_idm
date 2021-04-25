@@ -44,6 +44,13 @@ def weight_init(m):
         nn.init.orthogonal_(m.weight.data[:, :, mid, mid], gain)
 
 
+
+def tie_weights(src, trg):
+    assert type(src) == type(trg)
+    trg.weight = src.weight
+    trg.bias = src.bias
+
+
 class Actor(nn.Module):
     """MLP actor network."""
 
@@ -192,22 +199,24 @@ class ForwardModel(nn.Module):
     def __init__(self, obs_shape, action_shape, z_dim, critic, critic_target, hidden_dim):
         super(ForwardModel, self).__init__()
 
-        self.hidden_dim = self.encoder.feature_dim
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
+        self.hidden_dim = 50
 
         self.act_encoder = nn.Sequential(
             nn.Linear(action_shape[0], self.encoder.feature_dim), nn.ReLU(),
             nn.Linear(self.encoder.feature_dim, self.encoder.feature_dim)
         )
 
-        self.foward_predictor = nn.Sequential(
+        self.forward_predictor = nn.Sequential(
             nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
             nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
         )
 
         self.W = nn.Parameter(torch.rand(z_dim, z_dim))
+        self.act_encoder.apply(weight_init)
+        self.forward_predictor.apply(weight_init)
 
     def encode(self, x, detach_encoder=False, ema=False):
         """
@@ -228,7 +237,7 @@ class ForwardModel(nn.Module):
     def predict_next(self, o, a, detach_encoder=False):
         z_o_cur = self.encode(o, ema=False, detach_encoder=detach_encoder)
         z_a_cur = self.act_encoder(a)
-        z_o_next = self.foward_predictor(torch.cat((z_o_cur, z_a_cur), axis=1))
+        z_o_next = self.forward_predictor(torch.cat((z_o_cur, z_a_cur), axis=1))
         return z_o_next
 
 
@@ -254,9 +263,9 @@ class BackwardModel(nn.Module):
     def __init__(self, obs_shape, action_shape, z_dim, critic, critic_target, hidden_dim):
         super(BackwardModel, self).__init__()
 
-        self.hidden_dim = 50
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
+        self.hidden_dim = 50
 
         self.act_encoder = nn.Sequential(
             nn.Linear(action_shape[0], self.encoder.feature_dim), nn.ReLU(),
@@ -265,11 +274,13 @@ class BackwardModel(nn.Module):
 
         self.backward_predictor = nn.Sequential(
             nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
-            nn.Linear(self.hidden_dim, self.encoder.feature_dim), nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
         )
 
         self.W = nn.Parameter(torch.rand(z_dim, z_dim))
+        self.act_encoder.apply(weight_init)
+        self.backward_predictor.apply(weight_init)
 
     def encode(self, x, detach_encoder=False, ema=False):
         """
@@ -287,11 +298,25 @@ class BackwardModel(nn.Module):
             z_out = z_out.detach()
         return z_out
 
-    def predict_current(self, o_next, a, detach_encoder=False):
+    def predict_current(self, o_next, a, detach_encoder=False, detach_act_emb=False):
         z_o_next = self.encode(o_next, ema=False, detach_encoder=detach_encoder)
-        z_a_cur = self.act_encoder(a)
+
+        if detach_act_emb:
+            with torch.no_grad():
+                z_a_cur = self.act_encoder(a)
+                z_a_cur = z_a_cur.detach()
+        else:
+            z_a_cur = self.act_encoder(a)
+
         z_o_cur = self.backward_predictor(torch.cat((z_o_next, z_a_cur), axis=1))
         return z_o_cur
+
+    def copy_act_emb_weights_from(self, source):
+        """Tie convolutional layers"""
+        # only tie conv layers
+        for i in range(len(self.act_encoder)):
+            if isinstance(source.act_encoder[i], nn.Linear):
+                tie_weights(src=source.act_encoder[i], trg=self.act_encoder[i])
 
     def compute_logits(self, k, q):
         """
@@ -314,8 +339,8 @@ class InverseModel(nn.Module):
     ):
         super(InverseModel, self).__init__()
 
-        self.hidden_dim = 50
         self.encoder = critic.encoder
+        self.hidden_dim = 1024
 
         self.inverse_predictor = nn.Sequential(
             nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
@@ -323,7 +348,8 @@ class InverseModel(nn.Module):
             nn.Linear(self.hidden_dim, action_shape[0]), nn.Tanh()
         )
 
-        self.apply(weight_init)
+        self.W = nn.Parameter(torch.rand(action_shape[0], action_shape[0]))
+        self.inverse_predictor.apply(weight_init)
 
     def predict_act(
         self, obs, next_obs, detach_encoder=False
@@ -347,6 +373,7 @@ class InverseModel(nn.Module):
         logits = torch.matmul(k, Wz)  # (B,B)
         logits = logits - torch.max(logits, 1)[0][:, None]
         return logits
+
 
 class SacFbiAgent(object):
     """CURL representation learning with SAC."""
@@ -452,6 +479,7 @@ class SacFbiAgent(object):
             obs_shape, action_shape, encoder_feature_dim,
             self.critic, self.critic_target, hidden_dim
         ).to(self.device)
+        self.backward.copy_act_emb_weights_from(source=self.forward)
 
         self.inverse = InverseModel(
             obs_shape, action_shape,
@@ -514,17 +542,18 @@ class SacFbiAgent(object):
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
 
-        self.encoder_optimizer.zero_grad()
+        # self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
         loss.backward()
-        self.encoder_optimizer.step()
+        # self.encoder_optimizer.step()
         self.forward_optimizer.step()
 
         if step % self.log_interval == 0:
             L.log('train/forward_loss', loss, step)
 
     def update_backward(self, cur_obs, next_obs, cur_act, L, step):
-        z_cur_pred = self.backward.predict_current(next_obs, cur_act, self.detach_encoder)
+        z_cur_pred = self.backward.predict_current(next_obs, cur_act, self.detach_encoder,
+                                                   detach_act_emb=True)
         z_cur_gt = self.backward.encode(cur_obs, ema=True)
 
         queries, keys = z_cur_pred, z_cur_gt
@@ -533,10 +562,10 @@ class SacFbiAgent(object):
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
 
-        self.encoder_optimizer.zero_grad()
+        # self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
         loss.backward()
-        self.encoder_optimizer.step()
+        # self.encoder_optimizer.step()
         self.forward_optimizer.step()
 
         if step % self.log_interval == 0:
@@ -546,10 +575,16 @@ class SacFbiAgent(object):
         pred_act = self.inverse.predict_act(cur_obs, next_obs)
         loss = self.idm_criterion(pred_act, cur_act)
 
-        self.encoder_optimizer.zero_grad()
+        # queries, keys = pred_act, cur_act
+        #
+        # logits = self.inverse.compute_logits(queries, keys)
+        # labels = torch.arange(logits.shape[0]).long().to(self.device)
+        # loss = self.cross_entropy_loss(logits, labels)
+
+        # self.encoder_optimizer.zero_grad()
         self.inverse_optimizer.zero_grad()
         loss.backward()
-        self.encoder_optimizer.step()
+        # self.encoder_optimizer.step()
         self.inverse_optimizer.step()
 
         if step % self.log_interval == 0:
