@@ -33,8 +33,10 @@ class PixelEncoder(nn.Module):
             self.convs.append(nn.Conv2d(num_filters, num_filters, 3, stride=1))
 
         out_dim = OUT_DIM_64[num_layers] if obs_shape[-1] == 64 else OUT_DIM[num_layers]
-        self.fc = nn.Linear(num_filters * out_dim * out_dim, self.feature_dim)
-        self.ln = nn.LayerNorm(self.feature_dim)
+        self.projectors = nn.Sequential(
+            nn.Linear(num_filters * out_dim * out_dim, self.feature_dim),
+            nn.LayerNorm(self.feature_dim)
+        )
 
         self.outputs = dict()
         self.output_logits = output_logits
@@ -65,12 +67,14 @@ class PixelEncoder(nn.Module):
         if detach:
             h = h.detach()
 
-        h_fc = self.fc(h)
-        self.outputs['fc'] = h_fc
+        for i in range(len(self.projectors)):
+            h = self.projectors[i](h)
+            if isinstance(self.projectors[i], nn.Linear):
+                self.outputs['fc%s' % (i + 1)] = h
+            elif isinstance(self.projectors[i], nn.LayerNorm):
+                self.outputs['ln%s' % (i + 1)] = h
 
-        h_norm = self.ln(h_fc)
-        self.outputs['ln'] = h_norm
-
+        h_norm = h
         if self.output_logits:
             out = h_norm
         else:
@@ -96,8 +100,12 @@ class PixelEncoder(nn.Module):
 
         for i in range(self.num_layers):
             L.log_param('train_encoder/conv%s' % (i + 1), self.convs[i], step)
-        L.log_param('train_encoder/fc', self.fc, step)
-        L.log_param('train_encoder/ln', self.ln, step)
+
+        for i in range(len(self.projectors)):
+            if isinstance(self.projectors[i], nn.Linear):
+                L.log_param('train_encoder/fc%d' % i, self.projectors[i], step)
+            elif isinstance(self.projectors[i], nn.LayerNorm):
+                L.log_param('train_encoder/ln%d' % i, self.projectors[i], step)
 
 
 class IdentityEncoder(nn.Module):
