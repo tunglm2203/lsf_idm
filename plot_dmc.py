@@ -18,9 +18,11 @@ parser.add_argument('--shaded_std', type=bool, default=True)
 parser.add_argument('--shaded_err', type=bool, default=False)
 parser.add_argument('--train_test', action='store_true')
 
-parser.add_argument('--drq_dir', type=str, default='/home/tung/workspace/rlbench/drq/')
 parser.add_argument('--env', type=str, default='cheetah_run')
+parser.add_argument('--drq_dir', type=str, default='/home/tung/workspace/rlbench/drq/')
 parser.add_argument('--plot_drq', action='store_true')
+parser.add_argument('--slac_dir', type=str, default='/home/tung/workspace/rlbench/slac/')
+parser.add_argument('--plot_slac', action='store_true')
 
 args = parser.parse_args()
 
@@ -141,6 +143,8 @@ def plot_multiple_results(directories):
 
     if args.plot_drq:
         plot_drq_results()
+    if args.plot_slac:
+        plot_slac_results()
 
     # Plot data.
     for i in range(len(collect_data)):
@@ -183,6 +187,8 @@ def plot_multiple_results(directories):
 
     if args.plot_drq:
         legend_name.insert(0, 'DrQ')
+    if args.plot_slac:
+        legend_name.insert(1, 'SLAC')
 
     plt.legend(legend_name, loc='best', fontsize='x-large')
     plt.show()
@@ -197,6 +203,55 @@ def plot_drq_results():
     # Convert data into standard format
     x_concat = data['step'].to_numpy()
     y_concat = data['episode_reward'].to_numpy()
+    start_idxs = np.where(x_concat == 0)[0]
+
+    xs, ys = [], []
+    for i in range(len(start_idxs)):
+        if i == len(start_idxs) - 1:
+            start, end = start_idxs[i], -1
+        else:
+            start, end = start_idxs[i], start_idxs[i + 1]
+        xs.append(x_concat[start:end])
+        ys.append(y_concat[start:end])
+
+    # Plotting
+    if args.range != -1:
+        xs, ys = get_values_with_range(xs, ys, args.range)
+    xs, ys = pad(xs), pad(ys)
+    assert xs.shape == ys.shape
+
+    usex = xs[0]
+    ymean = np.nanmean(ys, axis=0)
+    ystd = np.nanstd(ys, axis=0)
+
+    ystderr = ystd / np.sqrt(len(ys))
+    plt.plot(usex, ymean, label='config')
+    if args.shaded_err:
+        plt.fill_between(usex, ymean - ystderr, ymean + ystderr, alpha=0.4)
+    if args.shaded_std:
+        plt.fill_between(usex, ymean - ystd, ymean + ystd, alpha=0.2)
+
+def plot_slac_results():
+    def read_df_slac(env_name, expected_num_trials=10):
+        fname = os.path.join(args.slac_dir, 'data/slac/dm_control_{}_slac.csv'.format(env_name))
+        with open(fname, 'r') as f:
+            df = pd.read_csv(f)
+        # decoder variance hyperparameter that achieves the best per-task average
+        # return across trials averaged over the first half a million environment
+        # steps
+        df_mean = df[df["OriginalEnvironmentSteps"] < 5e5].groupby(
+            "decoder_var").mean()
+        best_decoder_var = df_mean.idxmax().get("AverageReturnEvalPolicy")
+        df = df[df["decoder_var"] == best_decoder_var]
+        assert len(df['trial_id'].unique()) == expected_num_trials
+        df['OriginalEnvironmentStepMillions'] = df['OriginalEnvironmentSteps'] / 1e6
+        return df
+    # Read data from .csv file corresponding to environment 'args.env'
+    data = read_df_slac(args.env)
+
+    # Convert data into standard format
+    x_concat = data['OriginalEnvironmentSteps'].to_numpy()
+    y_concat = data['AverageReturnEvalPolicy'].to_numpy()
     start_idxs = np.where(x_concat == 0)[0]
 
     xs, ys = [], []
