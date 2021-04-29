@@ -22,6 +22,7 @@ from agent.sac_rad import SacRadAgent
 from agent.sac_cpm import SacCPMAgent
 from agent.sac_drq import SacDrqAgent
 from agent.sac_fbi import SacFbiAgent
+from agent.sac_model_pred_analyse import SacModelAnalyseAgent
 
 
 def parse_args():
@@ -332,6 +333,37 @@ def make_agent(obs_shape, action_shape, args, device):
             idm_update_freq=args.idm_update_freq,
             no_aug=args.cpm_noaug
         )
+    elif args.agent in ['sac_model_analyse']:
+        return SacModelAnalyseAgent(
+            obs_shape=obs_shape,
+            action_shape=action_shape,
+            device=device,
+            hidden_dim=args.hidden_dim,
+            discount=args.discount,
+            init_temperature=args.init_temperature,
+            alpha_lr=args.alpha_lr,
+            alpha_beta=args.alpha_beta,
+            actor_lr=args.actor_lr,
+            actor_beta=args.actor_beta,
+            actor_log_std_min=args.actor_log_std_min,
+            actor_log_std_max=args.actor_log_std_max,
+            actor_update_freq=args.actor_update_freq,
+            critic_lr=args.critic_lr,
+            critic_beta=args.critic_beta,
+            critic_tau=args.critic_tau,
+            critic_target_update_freq=args.critic_target_update_freq,
+            encoder_type=args.encoder_type,
+            encoder_feature_dim=args.encoder_feature_dim,
+            encoder_lr=args.encoder_lr,
+            encoder_tau=args.encoder_tau,
+            decoder_type=args.decoder_type,
+            decoder_lr=args.decoder_lr,
+            decoder_update_freq=args.decoder_update_freq,
+            decoder_latent_lambda=args.decoder_latent_lambda,
+            decoder_weight_lambda=args.decoder_weight_lambda,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters
+        )
     else:
         assert 'agent is not supported: %s' % args.agent
 
@@ -356,9 +388,9 @@ def make_env(args, mode='train', **kwargs):
     )
 
     if args.encoder_type == 'identity':
-        assert args.agent == 'sac_ae', 'If you use state, please use `sac_ae` agent.'
+        assert args.agent in ['sac_ae', 'sac_model_analyse'], 'If you use state, please use `sac_ae` agent.'
 
-    if args.agent in ['sac_ae', 'sac_drq']:
+    if args.agent in ['sac_ae', 'sac_drq', 'sac_model_analyse']:
         env_args.update(
             height=args.image_size,
             width=args.image_size,
@@ -388,7 +420,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
             pre_transform_image_size = args.pre_transform_image_size if 'crop' in args.data_augs else args.image_size
             pre_aug_obs_shape = (3 * args.frame_stack, pre_transform_image_size, pre_transform_image_size)
 
-    if args.agent in ['sac_ae']:
+    if args.agent in ['sac_ae', 'sac_model_analyse']:
         return utils.ReplayBuffer(
             obs_shape=env.observation_space.shape,
             action_shape=env.action_space.shape,
@@ -438,7 +470,7 @@ def main():
     env = make_env(args, mode='train')
     env.seed(args.seed)
     eval_env = make_env(args, mode='train')
-    eval_env.seed(args.seed)
+    eval_env.seed(1)
 
     # stack several consecutive frames together
     if args.encoder_type == 'pixel':
@@ -532,8 +564,14 @@ def main():
         # run training update
         if step >= args.init_steps:
             num_updates = args.init_steps if step == args.init_steps else args.n_grad_updates
+            if step == args.init_steps:
+                print(['[INFO] Training with initial samples ...'])
+                num_updates_fdm_enc = 0
+                for _ in range(num_updates_fdm_enc):
+                    agent.update(replay_buffer, L, step, train_rl=False)
+
             for _ in range(num_updates):
-                agent.update(replay_buffer, L, step)
+                agent.update(replay_buffer, L, step, train_rl=True)
 
         next_obs, reward, done, _ = env.step(action)
 
