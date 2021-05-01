@@ -175,6 +175,37 @@ class CurlReplayBuffer(Dataset):
 
         return obses, actions, rewards, next_obses, not_dones, cpc_kwargs
 
+    def sample_drq(self, no_aug=False):
+
+        idxs = np.random.randint(
+            0, self.capacity if self.full else self.idx, size=self.batch_size
+        )
+
+        obses = self.obses[idxs]
+        next_obses = self.next_obses[idxs]
+        obses_origin = obses.copy()
+        next_obses_origin = next_obses.copy()
+
+        obses_origin = center_crop_images(obses_origin, self.image_size)
+        next_obses_origin = center_crop_images(next_obses_origin, self.image_size)
+
+        obses = random_crop(obses, self.image_size)
+        next_obses = random_crop(next_obses, self.image_size)
+
+        obses_origin = torch.as_tensor(obses_origin, device=self.device).float()
+        next_obses_origin = torch.as_tensor(next_obses_origin, device=self.device).float()
+        obses = torch.as_tensor(obses, device=self.device).float()
+        next_obses = torch.as_tensor(next_obses, device=self.device).float()
+
+        actions = torch.as_tensor(self.actions[idxs], device=self.device)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
+        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+
+        drq_kwargs = dict(obses_origin=obses_origin, next_obses_origin=next_obses_origin,
+                          time_anchor=None, time_pos=None)
+
+        return obses, actions, rewards, next_obses, not_dones, drq_kwargs
+
     def save(self, save_dir):
         if self.idx == self.last_save:
             return

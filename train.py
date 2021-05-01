@@ -56,6 +56,7 @@ def parse_args():
     parser.add_argument('--fdm_lr', default=1e-3, type=float)
     parser.add_argument('--target_entropy', default='dimA', type=str)
     parser.add_argument('--n_warmup_encoder_fdm', default=0, type=int)
+    parser.add_argument('--use_reg', action='store_true')
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -337,7 +338,8 @@ def make_agent(obs_shape, action_shape, args, device):
             idm_update_freq=args.idm_update_freq,
             fdm_lr=args.fdm_lr,
             no_aug=args.cpm_noaug,
-            target_entropy=args.target_entropy
+            target_entropy=args.target_entropy,
+            use_reg=args.use_reg
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
@@ -476,7 +478,7 @@ def main():
     env = make_env(args, mode='train')
     env.seed(args.seed)
     eval_env = make_env(args, mode='train')
-    eval_env.seed(1)
+    eval_env.seed(args.seed)
 
     # stack several consecutive frames together
     if args.encoder_type == 'pixel':
@@ -575,10 +577,10 @@ def main():
                 if args.n_warmup_encoder_fdm > 0:
                     print("[INFO] Warmup %d steps." % (args.n_warmup_encoder_fdm))
                 for _ in range(args.n_warmup_encoder_fdm):
-                    agent.update(replay_buffer, L, step, train_rl=False)
+                    agent.warmup(replay_buffer, L, step)
 
             for _ in range(num_updates):
-                agent.update(replay_buffer, L, step, train_rl=True)
+                agent.update(replay_buffer, L, step)
 
         next_obs, reward, done, _ = env.step(action)
 
