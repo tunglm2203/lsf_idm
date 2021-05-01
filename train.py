@@ -52,10 +52,14 @@ def parse_args():
     parser.add_argument('--bdm_update_freq', default=1, type=int)
     parser.add_argument('--idm_update_freq', default=1, type=int)
     parser.add_argument('--cpm_noaug', action='store_true', default=False)
+    # Linearized FDM
+    parser.add_argument('--fdm_lr', default=1e-3, type=float)
+    parser.add_argument('--target_entropy', default='dimA', type=str)
+    parser.add_argument('--n_warmup_encoder_fdm', default=0, type=int)
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
-    parser.add_argument('--replay_buffer_capacity', default=1000000, type=int)
+    parser.add_argument('--replay_buffer_capacity', default=100000, type=int)
     # train
     parser.add_argument('--agent', default='sac_ae', type=str)
     parser.add_argument('--init_steps', default=1000, type=int)
@@ -331,7 +335,9 @@ def make_agent(obs_shape, action_shape, args, device):
             fdm_update_freq=args.fdm_update_freq,
             bdm_update_freq=args.bdm_update_freq,
             idm_update_freq=args.idm_update_freq,
-            no_aug=args.cpm_noaug
+            fdm_lr=args.fdm_lr,
+            no_aug=args.cpm_noaug,
+            target_entropy=args.target_entropy
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
@@ -537,7 +543,7 @@ def main():
                                                            args.seed))
                 L.log('eval/episode', episode, step)
                 evaluate(eval_env, agent, video, args.num_eval_episodes, L, step, args)
-                if args.save_model:
+                if args.save_model or step == args.num_train_steps:
                     agent.save(model_dir, step)
                 if args.save_buffer:
                     replay_buffer.save(buffer_dir)
@@ -565,9 +571,10 @@ def main():
         if step >= args.init_steps:
             num_updates = args.init_steps if step == args.init_steps else args.n_grad_updates
             if step == args.init_steps:
-                print(['[INFO] Training with initial samples ...'])
-                num_updates_fdm_enc = 0
-                for _ in range(num_updates_fdm_enc):
+                print('[INFO] Training with initial samples ...')
+                if args.n_warmup_encoder_fdm > 0:
+                    print("[INFO] Warmup %d steps." % (args.n_warmup_encoder_fdm))
+                for _ in range(args.n_warmup_encoder_fdm):
                     agent.update(replay_buffer, L, step, train_rl=False)
 
             for _ in range(num_updates):
