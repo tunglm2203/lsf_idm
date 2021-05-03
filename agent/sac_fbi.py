@@ -520,7 +520,7 @@ class SacFbiAgent(object):
         fdm_loss.backward()
         self.forward_optimizer.step()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_dynamic/pred_loss', pred_loss, step)
 
         # Step 2: Freeze act encoder, forward & error model, learn obs encoder
@@ -539,7 +539,7 @@ class SacFbiAgent(object):
         loss.backward()
         self.encoder_optimizer.step()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', loss, step)
         self.forward.log(L, step)
 
@@ -565,7 +565,7 @@ class SacFbiAgent(object):
         loss.backward()
         self.forward_optimizer.step()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', loss, step)
         self.forward.log(L, step)
 
@@ -583,6 +583,7 @@ class SacFbiAgent(object):
         z_next_pred = z_next_pred_linear + error_model
 
         pred_loss = F.mse_loss(z_next_pred, z_next_gt)
+
         reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
         fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
 
@@ -590,7 +591,7 @@ class SacFbiAgent(object):
         fdm_loss.backward()
         self.forward_optimizer.step()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_dynamic/pred_loss', pred_loss, step)
             L.log('train_dynamic/error_model', error_model.abs().mean(), step)
             L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
@@ -613,7 +614,7 @@ class SacFbiAgent(object):
         loss.backward()
         self.encoder_optimizer.step()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', loss, step)
         self.forward.log(L, step)
 
@@ -644,7 +645,7 @@ class SacFbiAgent(object):
         loss.backward()
         self.forward_optimizer.step()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', contrastive_loss, step)
             L.log('train_dynamic/error_model', error_model.abs().mean(), step)
             # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
@@ -661,7 +662,7 @@ class SacFbiAgent(object):
         current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_critic/loss', critic_loss, step)
 
         # Optimize the critic
@@ -693,7 +694,7 @@ class SacFbiAgent(object):
         Q1_aug, Q2_aug = self.critic(obs_aug, action, detach_encoder=self.detach_encoder)
         critic_loss += F.mse_loss(Q1_aug, target_Q) + F.mse_loss(Q2_aug, target_Q)
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_critic/loss', critic_loss, step)
 
         # Optimize the critic
@@ -711,12 +712,12 @@ class SacFbiAgent(object):
         actor_Q = torch.min(actor_Q1, actor_Q2)
         actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_actor/loss', actor_loss, step)
             L.log('train_actor/target_entropy', self.target_entropy, step)
         entropy = 0.5 * log_std.shape[1] * (1.0 + np.log(2 * np.pi)) + log_std.sum(dim=-1)
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_actor/entropy', entropy.mean(), step)
 
         # optimize the actor
@@ -729,7 +730,7 @@ class SacFbiAgent(object):
         self.log_alpha_optimizer.zero_grad()
         alpha_loss = (self.alpha * (-log_pi - self.target_entropy).detach()).mean()
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train_alpha/loss', alpha_loss, step)
             L.log('train_alpha/value', self.alpha, step)
 
@@ -743,7 +744,7 @@ class SacFbiAgent(object):
         else:
             obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(self.no_aug)
 
-        if bool(step) and step % self.log_interval == 0:
+        if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
         if self.use_reg:
