@@ -57,6 +57,9 @@ def parse_args():
     parser.add_argument('--target_entropy', default='dimA', type=str)
     parser.add_argument('--n_warmup_encoder_fdm', default=0, type=int)
     parser.add_argument('--use_reg', action='store_true')
+    parser.add_argument('--enc_fw_e2e', action='store_true')
+    parser.add_argument('--fdm_arch', default='linear', type=str)
+    parser.add_argument('--fdm_error_coef', default=1.0, type=float)
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -339,7 +342,10 @@ def make_agent(obs_shape, action_shape, args, device):
             fdm_lr=args.fdm_lr,
             no_aug=args.cpm_noaug,
             target_entropy=args.target_entropy,
-            use_reg=args.use_reg
+            use_reg=args.use_reg,
+            enc_fw_e2e=args.enc_fw_e2e,
+            fdm_arch=args.fdm_arch,
+            fdm_error_coef=args.fdm_error_coef
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
