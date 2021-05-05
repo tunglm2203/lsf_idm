@@ -190,7 +190,7 @@ def plot_multiple_results(directories):
     if args.plot_slac:
         legend_name.insert(1, 'SLAC')
 
-    plt.legend(legend_name, loc='best', fontsize='x-large')
+    plt.legend(legend_name, loc='best', fontsize=10)
     plt.show()
 
 def plot_drq_results():

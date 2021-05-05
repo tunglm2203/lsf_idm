@@ -248,7 +248,7 @@ class ForwardModel(nn.Module):
             self.error_model = nn.Sequential(
                 nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, self.hidden_dim),
+                nn.Linear(self.hidden_dim, self.hidden_dim)
             )
         else:
             assert 'Not support architecture: ', arch
@@ -359,7 +359,10 @@ class SacFbiAgent(object):
             detach_encoder=False,
             no_aug=False,
             target_entropy='dimA',
-            use_reg=False
+            use_reg=False,
+            enc_fw_e2e=False,
+            fdm_arch='linear',
+            fdm_error_coef=1.0
     ):
         self.device = device
         self.discount = discount
@@ -377,13 +380,13 @@ class SacFbiAgent(object):
 
         # self.pi_arch = 'linear'
         # self.q_arch = 'linear'
-        self.fdm_arch = 'linear'
+        self.fdm_arch = fdm_arch
         self.pi_arch = 'non_linear'
         self.q_arch = 'non_linear'
         # self.fdm_arch = 'non_linear'
-        self.enc_fw_e2e = False
+        self.enc_fw_e2e = enc_fw_e2e
 
-        self.fdm_error_coef = 1
+        self.fdm_error_coef = fdm_error_coef
 
         self.fdm_update_freq = fdm_update_freq
         self.bdm_update_freq = bdm_update_freq
@@ -470,7 +473,6 @@ class SacFbiAgent(object):
 
         self.train()
         self.critic_target.train()
-        self.update_calls = 0
         self.warmup_calls = 0
 
     def train(self, training=True):
@@ -753,10 +755,10 @@ class SacFbiAgent(object):
         else:
             self.update_critic(obs, action, reward, next_obs, not_done, L, step)
 
-        if self.update_calls % self.actor_update_freq == 0:
+        if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)
 
-        if self.update_calls % self.critic_target_update_freq == 0:
+        if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(
                 self.critic.Q1, self.critic_target.Q1, self.critic_tau
             )
@@ -768,7 +770,7 @@ class SacFbiAgent(object):
                 self.encoder_tau
             )
 
-        if self.update_calls % self.fdm_update_freq == 0:
+        if step % self.fdm_update_freq == 0:
             # print('[INFO] Training with: Forward model')
             if self.fdm_arch == 'non_linear':
                 if not self.enc_fw_e2e:
@@ -782,7 +784,6 @@ class SacFbiAgent(object):
                     self.update_forward_v2_1(obs, next_obs, action, L, step)
             else:
                 assert 'Error'
-        self.update_calls += 1
 
     def warmup(self, replay_buffer, L, step):
         obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(no_aug=self.no_aug)
