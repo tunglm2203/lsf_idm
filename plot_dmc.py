@@ -61,12 +61,12 @@ def pad(xs, value=np.nan):
     for x in xs:
         if x.shape[0] >= maxlen:
             padded_xs.append(x)
-
-        padding = np.ones((maxlen - x.shape[0],) + x.shape[1:]) * value
-        x_padded = np.concatenate([x, padding], axis=0)
-        assert x_padded.shape[1:] == x.shape[1:]
-        assert x_padded.shape[0] == maxlen
-        padded_xs.append(x_padded)
+        else:
+            padding = np.ones((maxlen - x.shape[0],) + x.shape[1:]) * value
+            x_padded = np.concatenate([x, padding], axis=0)
+            assert x_padded.shape[1:] == x.shape[1:]
+            assert x_padded.shape[0] == maxlen
+            padded_xs.append(x_padded)
     return np.array(padded_xs)
 
 
