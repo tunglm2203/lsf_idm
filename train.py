@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument('--enc_fw_e2e', action='store_true')
     parser.add_argument('--fdm_arch', default='linear', type=str)
     parser.add_argument('--fdm_error_coef', default=1.0, type=float)
+    parser.add_argument('--rew_pred', action='store_true')
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -345,7 +346,8 @@ def make_agent(obs_shape, action_shape, args, device):
             use_reg=args.use_reg,
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
-            fdm_error_coef=args.fdm_error_coef
+            fdm_error_coef=args.fdm_error_coef,
+            rew_pred=args.rew_pred
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
@@ -551,7 +553,8 @@ def main():
                                                            args.seed))
                 L.log('eval/episode', episode, step)
                 evaluate(eval_env, agent, video, args.num_eval_episodes, L, step, args)
-                if args.save_model or step == args.num_train_steps:
+                if args.save_model or step == args.num_train_steps or \
+                    step == int(100000 / args.action_repeat) or step == int(500000 / args.action_repeat):
                     agent.save(model_dir, step)
                 if args.save_buffer:
                     replay_buffer.save(buffer_dir)
