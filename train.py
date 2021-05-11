@@ -347,7 +347,8 @@ def make_agent(obs_shape, action_shape, args, device):
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
             fdm_error_coef=args.fdm_error_coef,
-            rew_pred=args.rew_pred
+            rew_pred=args.rew_pred,
+            action_repeat=args.action_repeat
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
