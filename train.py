@@ -60,7 +60,8 @@ def parse_args():
     parser.add_argument('--enc_fw_e2e', action='store_true')
     parser.add_argument('--fdm_arch', default='linear', type=str)
     parser.add_argument('--fdm_error_coef', default=1.0, type=float)
-    parser.add_argument('--rew_pred', action='store_true')
+    parser.add_argument('--n_warmup_steps', type=int, default=2000000)
+    parser.add_argument('--n_decay_steps', type=int, default=1900000)
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
