@@ -311,6 +311,10 @@ def make_agent(obs_shape, action_shape, args, device):
             detach_encoder=args.detach_encoder,
         )
     elif args.agent in ['sac_fbi']:
+        if args.num_train_envsteps == -1:
+            total_steps = args.num_train_steps * args.action_repeat
+        else:
+            total_steps = args.num_train_envsteps
         return SacFbiAgent(
             obs_shape=obs_shape,
             action_shape=action_shape,
@@ -347,8 +351,8 @@ def make_agent(obs_shape, action_shape, args, device):
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
             fdm_error_coef=args.fdm_error_coef,
-            rew_pred=args.rew_pred,
-            action_repeat=args.action_repeat
+            action_repeat=args.action_repeat,
+            total_steps=total_steps
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
