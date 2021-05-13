@@ -398,6 +398,7 @@ class SacFbiAgent(object):
             total_steps=0,
             n_warmup_steps=100000,
             n_decay_steps=1900000,
+            scheduler_enable=False,
     ):
         self.device = device
         self.discount = discount
@@ -415,6 +416,7 @@ class SacFbiAgent(object):
 
         print('[INFO] Total training step: ', total_steps)
         self.action_repeat = action_repeat
+        self.scheduler_enable = scheduler_enable
         # self.n_warmup_steps = total_steps       # TODO: Hardcode, fix later
         self.n_warmup_steps = n_warmup_steps  # TODO: Hardcode, fix later
         self.warmup_start_val = 1.0
@@ -626,13 +628,16 @@ class SacFbiAgent(object):
     def update_forward_v2(self, cur_obs, next_obs, cur_act, reward, L, step):
         # TODO: For linear FDM, train alternatively
         env_step = step * self.action_repeat
-        if env_step < self.n_warmup_steps:
-            weight_loss = subexpd(env_step, self.warmup_start_step, self.warmup_end_step,
-                                  self.warmup_start_val, self.warmup_end_val, warmup=True)
+        if self.scheduler_enable:
+            if env_step < self.n_warmup_steps:
+                weight_loss = subexpd(env_step, self.warmup_start_step, self.warmup_end_step,
+                                      self.warmup_start_val, self.warmup_end_val, warmup=True)
+            else:
+                weight_loss = subexpd(env_step, self.decay_start_step, self.decay_end_step,
+                                      self.decay_start_val, self.decay_end_val,
+                                      start_t=self.n_warmup_steps, warmup=False)
         else:
-            weight_loss = subexpd(env_step, self.decay_start_step, self.decay_end_step,
-                                  self.decay_start_val, self.decay_end_val,
-                                  start_t=self.n_warmup_steps, warmup=False)
+            weight_loss = 1.0
         # Step 1: Freeze obs encoder, learn act encoder, forward & error model
         with torch.no_grad():
             z_cur = self.forward.encoder(cur_obs).detach()
