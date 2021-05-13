@@ -590,8 +590,7 @@ def main():
 
         # run training update
         if step >= args.init_steps:
-            # num_updates = args.init_steps if step == args.init_steps else args.n_grad_updates
-            num_updates = 5000 if step == args.init_steps else args.n_grad_updates
+            num_updates = args.init_steps if step == args.init_steps else args.n_grad_updates
             if step == args.init_steps:
                 print('[INFO] Training with initial samples ...')
                 if args.n_warmup_encoder_fdm > 0:
