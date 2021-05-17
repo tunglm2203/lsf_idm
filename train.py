@@ -108,6 +108,7 @@ def parse_args():
     parser.add_argument('--alpha_beta', default=0.5, type=float)
     # misc
     parser.add_argument('--seed', default=1, type=int)
+    parser.add_argument('--eval_seed', default=1, type=int)
     parser.add_argument('--work_dir', default='.', type=str)
     parser.add_argument('--exp', default='exp', type=str)
     parser.add_argument('--save_tb', default=False, action='store_true')
@@ -496,7 +497,9 @@ def main():
     env = make_env(args, mode='train')
     env.seed(args.seed)
     eval_env = make_env(args, mode='train')
-    eval_env.seed(args.seed)
+    eval_seed = int(np.random.choice([2, 10]))
+    args.__dict__["eval_seed"] = eval_seed
+    eval_env.seed(eval_seed)
 
     # stack several consecutive frames together
     if args.encoder_type == 'pixel':
