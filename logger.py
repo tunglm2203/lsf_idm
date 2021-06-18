@@ -91,8 +91,9 @@ class MetersGroup(object):
 
 
 class Logger(object):
-    def __init__(self, log_dir, use_tb=True, config='rl'):
+    def __init__(self, log_dir, use_tb=True, action_repeat=1, config='rl'):
         self._log_dir = log_dir
+        self._action_repeat = action_repeat
         if use_tb:
             tb_dir = os.path.join(log_dir, 'tb')
             if os.path.exists(tb_dir):
@@ -109,23 +110,30 @@ class Logger(object):
             formating=FORMAT_CONFIG[config]['eval']
         )
 
+    def _update_step(self, step):
+        return step * self._action_repeat
+
     def _try_sw_log(self, key, value, step):
+        step = self._update_step(step)
         if self._sw is not None:
             self._sw.add_scalar(key, value, step)
 
     def _try_sw_log_image(self, key, image, step):
+        step = self._update_step(step)
         if self._sw is not None:
             assert image.dim() == 3
             grid = torchvision.utils.make_grid(image.unsqueeze(1))
             self._sw.add_image(key, grid, step)
 
     def _try_sw_log_video(self, key, frames, step):
+        step = self._update_step(step)
         if self._sw is not None:
             frames = torch.from_numpy(np.array(frames))
             frames = frames.unsqueeze(0)
             self._sw.add_video(key, frames, step, fps=30)
 
     def _try_sw_log_histogram(self, key, histogram, step):
+        step = self._update_step(step)
         if self._sw is not None:
             self._sw.add_histogram(key, histogram, step)
 

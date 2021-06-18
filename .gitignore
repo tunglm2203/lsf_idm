@@ -7,3 +7,15 @@ logs_dmc/
 .idea/
 __pycache__/
 scripts/*.sh
+mount_dir.sh
+tester/*
+run_tensorboard.py
+baseline_agent.py
+bisim_agent.py
+sac_ae_curl.py
+sac_fbi_test.py
+sac_pr.py
+plot_dmc_v1.py
+train_dbc.py
+frn.py
+scripts/*

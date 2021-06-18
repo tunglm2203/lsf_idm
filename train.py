@@ -543,7 +543,7 @@ def main():
         device=device
     )
 
-    L = Logger(args.work_dir, use_tb=args.save_tb)
+    L = Logger(args.work_dir, use_tb=args.save_tb, action_repeat=args.action_repeat)
 
     if args.num_train_envsteps != -1:
         # Override N training step if args.num_train_envsteps is given
