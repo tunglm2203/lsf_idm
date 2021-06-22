@@ -395,10 +395,10 @@ class SacFbiAgent(object):
             fdm_error_coef=1.0,
             rew_pred=False,
             action_repeat=1,
-            total_steps=0,
-            n_warmup_steps=100000,
-            n_decay_steps=1900000,
-            scheduler_enable=False,
+            # total_steps=0,
+            # n_warmup_steps=100000,
+            # n_decay_steps=1900000,
+            # scheduler_enable=False,
     ):
         self.device = device
         self.discount = discount
@@ -414,23 +414,6 @@ class SacFbiAgent(object):
         self.no_aug = no_aug
         self.use_reg = use_reg
 
-        print('[INFO] Total training step: ', total_steps)
-        self.action_repeat = action_repeat
-        self.scheduler_enable = scheduler_enable
-        # self.n_warmup_steps = total_steps       # TODO: Hardcode, fix later
-        self.n_warmup_steps = n_warmup_steps  # TODO: Hardcode, fix later
-        self.warmup_start_val = 1.0
-        self.warmup_end_val = 1.0
-        self.warmup_start_step = 0
-        self.warmup_end_step = self.n_warmup_steps
-
-        self.decay_start_step = 0
-        # self.decay_end_step = 0
-        self.decay_end_step = n_decay_steps
-        self.decay_start_val = 1.0
-        self.decay_end_val = 1e-4
-
-        assert self.decay_end_step < total_steps
 
         # self.pi_arch = 'linear'
         # self.q_arch = 'linear'
@@ -527,7 +510,7 @@ class SacFbiAgent(object):
 
         self.train()
         self.critic_target.train()
-        self.warmup_calls = 0
+        # self.warmup_calls = 0
 
     def train(self, training=True):
         self.training = training
@@ -627,18 +610,6 @@ class SacFbiAgent(object):
 
     def update_forward_v2(self, cur_obs, next_obs, cur_act, reward, L, step):
         # TODO: For linear FDM, train alternatively
-        env_step = step * self.action_repeat
-        if self.scheduler_enable:
-            if env_step < self.n_warmup_steps:
-                weight_loss = subexpd(env_step, self.warmup_start_step, self.warmup_end_step,
-                                      self.warmup_start_val, self.warmup_end_val, warmup=True)
-            else:
-                weight_loss = subexpd(env_step, self.decay_start_step, self.decay_end_step,
-                                      self.decay_start_val, self.decay_end_val,
-                                      start_t=self.n_warmup_steps, warmup=False)
-        else:
-            weight_loss = 1.0
-        # Step 1: Freeze obs encoder, learn act encoder, forward & error model
         with torch.no_grad():
             z_cur = self.forward.encoder(cur_obs).detach()
             z_next_gt = self.forward.encoder_target(next_obs).detach()
@@ -654,8 +625,6 @@ class SacFbiAgent(object):
         reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
         fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
 
-        fdm_loss = weight_loss * fdm_loss
-
         self.forward_optimizer.zero_grad()
         fdm_loss.backward()
         self.forward_optimizer.step()
@@ -664,7 +633,6 @@ class SacFbiAgent(object):
             L.log('train_dynamic/pred_loss', pred_loss, step)
             L.log('train_dynamic/error_model', error_model.abs().mean(), step)
             L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
-            L.log('train_dynamic/weight_loss', weight_loss, step)
 
         # Step 2: Freeze act encoder, forward & error model, learn obs encoder
         z_cur = self.forward.encoder(cur_obs)
@@ -679,7 +647,6 @@ class SacFbiAgent(object):
         logits = self.forward.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
-        loss = weight_loss * loss
 
         self.encoder_optimizer.zero_grad()
         loss.backward()
@@ -854,37 +821,6 @@ class SacFbiAgent(object):
             else:
                 assert 'Error'
 
-    def warmup(self, replay_buffer, L, step):
-        obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(no_aug=self.no_aug)
-
-        if self.warmup_calls % self.critic_target_update_freq == 0:
-            utils.soft_update_params(
-                self.critic.Q1, self.critic_target.Q1, self.critic_tau
-            )
-            utils.soft_update_params(
-                self.critic.Q2, self.critic_target.Q2, self.critic_tau
-            )
-            utils.soft_update_params(
-                self.critic.encoder, self.critic_target.encoder,
-                self.encoder_tau
-            )
-
-        if self.warmup_calls % self.fdm_update_freq == 0:
-            # print('[INFO] Training with: Forward model')
-            if self.fdm_arch == 'non_linear':
-                if not self.enc_fw_e2e:
-                    self.update_forward_v1(obs, next_obs, action, reward, L, step)
-                else:
-                    self.update_forward_v1_1(obs, next_obs, action, reward, L, step)
-            elif self.fdm_arch == 'linear':
-                if not self.enc_fw_e2e:
-                    self.update_forward_v2(obs, next_obs, action, reward, L, step)
-                else:
-                    self.update_forward_v2_1(obs, next_obs, action, reward, L, step)
-            else:
-                assert 'Error'
-
-        self.warmup_calls += 1
 
     def save(self, model_dir, step):
         torch.save(
