@@ -227,26 +227,27 @@ class ForwardModel(nn.Module):
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
         self.hidden_dim = 50
+        self.act_emb_dim = 50
 
         self.act_encoder = nn.Sequential(
             nn.Linear(action_shape[0], self.encoder.feature_dim), nn.ReLU(),
-            nn.Linear(self.encoder.feature_dim, self.encoder.feature_dim)
+            nn.Linear(self.encoder.feature_dim, self.act_emb_dim)
         )
 
         print('[INFO] Forward model architecture: ', arch)
         if arch == 'non_linear':
             self.forward_predictor = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
+                nn.Linear(self.encoder.feature_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim),
             )
             self.error_model = None
         elif arch == 'linear':
             self.forward_predictor = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim)
+                nn.Linear(self.encoder.feature_dim + self.act_emb_dim, self.hidden_dim)
             )
             self.error_model = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim * 2, self.hidden_dim), nn.ReLU(),
+                nn.Linear(self.encoder.feature_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim)
             )
@@ -257,29 +258,6 @@ class ForwardModel(nn.Module):
         # self.act_encoder.apply(weight_init)
         # self.forward_predictor.apply(weight_init)
         self.outputs = dict()
-
-    def encode(self, x, detach_encoder=False, ema=False):
-        """
-        Encoder: z_t = e(x_t)
-        :param x: x_t, x y coordinates
-        :return: z_t, value in r2
-        """
-        if ema:
-            with torch.no_grad():
-                z_out = self.encoder_target(x)
-        else:
-            z_out = self.encoder(x)
-
-        if detach_encoder:
-            z_out = z_out.detach()
-        return z_out
-
-    def predict_next(self, o, a, detach_encoder=False):
-        z_o_cur = self.encode(o, ema=False, detach_encoder=detach_encoder)
-        z_a_cur = self.act_encoder(a)
-        z_o_next = self.forward_predictor(torch.cat((z_o_cur, z_a_cur), dim=1))
-        return z_o_next
-
 
     def compute_logits(self, k, q):
         """
@@ -377,14 +355,11 @@ class SacFbiAgent(object):
             encoder_type='pixel',
             encoder_feature_dim=50,
             encoder_lr=1e-3,
-            idm_lr=1e-3,
             fdm_lr=1e-3,
             encoder_tau=0.005,
             num_layers=4,
             num_filters=32,
             fdm_update_freq=1,
-            bdm_update_freq=np.inf,
-            idm_update_freq=np.inf,
             log_interval=100,
             detach_encoder=False,
             no_aug=False,
@@ -393,12 +368,6 @@ class SacFbiAgent(object):
             enc_fw_e2e=False,
             fdm_arch='linear',
             fdm_error_coef=1.0,
-            rew_pred=False,
-            action_repeat=1,
-            # total_steps=0,
-            # n_warmup_steps=100000,
-            # n_decay_steps=1900000,
-            # scheduler_enable=False,
     ):
         self.device = device
         self.discount = discount
@@ -424,10 +393,7 @@ class SacFbiAgent(object):
         self.enc_fw_e2e = enc_fw_e2e
 
         self.fdm_error_coef = fdm_error_coef
-
         self.fdm_update_freq = fdm_update_freq
-        self.bdm_update_freq = bdm_update_freq
-        self.idm_update_freq = idm_update_freq
 
         print('[INFO] Use augmentation: ', str(not self.no_aug))
 
@@ -475,42 +441,25 @@ class SacFbiAgent(object):
             [self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999)
         )
 
+        # Forward model scope
         self.forward = ForwardModel(
-            obs_shape, action_shape, encoder_feature_dim, self.critic, self.critic_target, hidden_dim,
-            encoder_type, encoder_feature_dim, num_layers, num_filters,
+            obs_shape, action_shape, encoder_feature_dim, self.critic, self.critic_target,
+            hidden_dim, encoder_type, encoder_feature_dim, num_layers, num_filters,
             self.fdm_arch
         ).to(self.device)
 
-        if self.enc_fw_e2e:
-            self.forward_optimizer = torch.optim.Adam(
-                self.forward.parameters(), lr=fdm_lr
-            )
-        else:
-            if self.fdm_arch == 'linear':
-                self.encoder_optimizer = torch.optim.Adam(
-                    list(self.forward.encoder.parameters()) +
-                    [self.forward.W], lr=encoder_lr)
-
-                self.forward_optimizer = torch.optim.Adam(
-                    list(self.forward.forward_predictor.parameters()) +
-                    list(self.forward.act_encoder.parameters()) +
-                    list(self.forward.error_model.parameters()), lr=fdm_lr
-                )
-            elif self.fdm_arch == 'non_linear':
-                self.encoder_optimizer = torch.optim.Adam(
-                    list(self.forward.encoder.parameters()) +
-                    [self.forward.W], lr=encoder_lr
-                )
-                self.forward_optimizer = torch.optim.Adam(
-                    list(self.forward.forward_predictor.parameters()) +
-                    list(self.forward.act_encoder.parameters()), lr=fdm_lr
-                )
+        encoder_params = list(self.forward.encoder.parameters()) + [self.forward.W]
+        fdm_params = list(self.forward.forward_predictor.parameters()) + \
+                     list(self.forward.act_encoder.parameters())
+        if self.fdm_arch == 'linear':
+            fdm_params += list(self.forward.error_model.parameters())
+        self.encoder_optimizer = torch.optim.Adam(encoder_params, lr=encoder_lr)
+        self.forward_optimizer = torch.optim.Adam(fdm_params, lr=fdm_lr)
 
         self.cross_entropy_loss = nn.CrossEntropyLoss()
 
         self.train()
         self.critic_target.train()
-        # self.warmup_calls = 0
 
     def train(self, training=True):
         self.training = training
@@ -541,19 +490,30 @@ class SacFbiAgent(object):
             mu, pi, _, _ = self.actor(obs, compute_log_pi=False)
             return pi.cpu().data.numpy().flatten()
 
-    def update_forward_v1(self, cur_obs, next_obs, cur_act, reward, L, step):
-        # TODO: For non-linear FDM, train alternatively
-        # Step 1: Freeze obs encoder, learn act encoder, forward & error model
+    def update_fw_alt(self, cur_obs, next_obs, cur_act, reward, L, step):
+        # TODO: Train FDM alternatively
+        assert not self.enc_fw_e2e
+        # Step 1: Freeze "obs encoder", learn "act encoder & forward model & error model"
         with torch.no_grad():
             z_cur = self.forward.encoder(cur_obs).detach()
             z_next_gt = self.forward.encoder_target(next_obs).detach()
 
         a_cur = self.forward.act_encoder(cur_act)
-        # s' = f(s,a)
+        # s' = Ws*s + Wa*a + error(s,a)
         z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
+        if self.fdm_arch == 'linear':
+            error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
+            z_next_pred = z_next_pred + error_model
+        else:
+            error_model = None
 
         pred_loss = F.mse_loss(z_next_pred, z_next_gt)
-        fdm_loss = pred_loss
+        if self.fdm_arch == 'linear':
+            reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
+            fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
+        else:
+            reg_error_loss = None
+            fdm_loss = pred_loss
 
         self.forward_optimizer.zero_grad()
         fdm_loss.backward()
@@ -561,133 +521,72 @@ class SacFbiAgent(object):
 
         if step % self.log_interval == 0:
             L.log('train_dynamic/pred_loss', pred_loss, step)
+            if self.fdm_arch == 'linear':
+                L.log('train_dynamic/error_model', error_model.abs().mean(), step)
+                L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
 
-        # Step 2: Freeze act encoder, forward & error model, learn obs encoder
+        # Step 2: Freeze "act encoder & forward & error model", learn obs encoder
         z_cur = self.forward.encoder(cur_obs)
-        a_cur = self.forward.act_encoder(cur_act)
 
+        a_cur = self.forward.act_encoder(cur_act)
         z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-
-        queries, keys = z_next_pred, z_next_gt
-
-        logits = self.forward.compute_logits(queries, keys)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        loss = self.cross_entropy_loss(logits, labels)
-
-        self.encoder_optimizer.zero_grad()
-        loss.backward()
-        self.encoder_optimizer.step()
-
-        if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', loss, step)
-        self.forward.log(L, step)
-
-    def update_forward_v1_1(self, cur_obs, next_obs, cur_act, reward, L, step):
-        # TODO: For non-linear FDM, train E2E
-        z_cur = self.forward.encoder(cur_obs)
-        a_cur = self.forward.act_encoder(cur_act)
-        with torch.no_grad():
-            z_next_gt = self.forward.encoder_target(next_obs).detach()
-
-        # s' = f(s,a)
-        z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-
-        queries, keys = z_next_pred, z_next_gt
-
-        logits = self.forward.compute_logits(queries, keys)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        contrastive_loss = self.cross_entropy_loss(logits, labels)
-
-        loss = contrastive_loss
-
-        self.forward_optimizer.zero_grad()
-        loss.backward()
-        self.forward_optimizer.step()
-
-        if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', loss, step)
-        self.forward.log(L, step)
-
-    def update_forward_v2(self, cur_obs, next_obs, cur_act, reward, L, step):
-        # TODO: For linear FDM, train alternatively
-        with torch.no_grad():
-            z_cur = self.forward.encoder(cur_obs).detach()
-            z_next_gt = self.forward.encoder_target(next_obs).detach()
-
-        a_cur = self.forward.act_encoder(cur_act)
-        # s' = Ws*s + Wa*a + error(s,a)
-        z_next_pred_linear = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
-        z_next_pred = z_next_pred_linear + error_model
-
-        pred_loss = F.mse_loss(z_next_pred, z_next_gt)
-
-        reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
-        fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
-
-        self.forward_optimizer.zero_grad()
-        fdm_loss.backward()
-        self.forward_optimizer.step()
-
-        if step % self.log_interval == 0:
-            L.log('train_dynamic/pred_loss', pred_loss, step)
-            L.log('train_dynamic/error_model', error_model.abs().mean(), step)
-            L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
-
-        # Step 2: Freeze act encoder, forward & error model, learn obs encoder
-        z_cur = self.forward.encoder(cur_obs)
-        a_cur = self.forward.act_encoder(cur_act)
-
-        z_next_pred_linear = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
-
-        z_next_pred = z_next_pred_linear + error_model
-        queries, keys = z_next_pred, z_next_gt
-
-        logits = self.forward.compute_logits(queries, keys)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        loss = self.cross_entropy_loss(logits, labels)
-
-        self.encoder_optimizer.zero_grad()
-        loss.backward()
-        self.encoder_optimizer.step()
-
-        if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', loss, step)
-        self.forward.log(L, step)
-
-    def update_forward_v2_1(self, cur_obs, next_obs, cur_act, reward, L, step):
-        # TODO: For linear FDM, train E2E
-        z_cur = self.forward.encoder(cur_obs)
-        a_cur = self.forward.act_encoder(cur_act)
-        with torch.no_grad():
-            z_next_gt = self.forward.encoder_target(next_obs).detach()
-
-        # s' = Ws*s + Wa*a + error(s,a)
-        z_next_pred_linear = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
-
-        z_next_pred = z_next_pred_linear + error_model
+        if self.fdm_arch == 'linear':
+            error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
+            z_next_pred = z_next_pred + error_model
 
         # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
+        queries, keys = z_next_pred, z_next_gt
+
+        logits = self.forward.compute_logits(queries, keys)
+        labels = torch.arange(logits.shape[0]).long().to(self.device)
+        loss = self.cross_entropy_loss(logits, labels)
+
+        self.encoder_optimizer.zero_grad()
+        loss.backward()
+        self.encoder_optimizer.step()
+
+        if step % self.log_interval == 0:
+            L.log('train_dynamic/contrastive_loss', loss, step)
+        self.forward.log(L, step)
+
+    def update_fw_e2e(self, cur_obs, next_obs, cur_act, reward, L, step):
+        # TODO: Train FDM e2e
+        assert self.enc_fw_e2e
+        z_cur = self.forward.encoder(cur_obs)
+        a_cur = self.forward.act_encoder(cur_act)
+        with torch.no_grad():
+            z_next_gt = self.forward.encoder_target(next_obs).detach()
+
+        # s' = Ws*s + Wa*a + error(s,a)
+        z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
+        if self.fdm_arch == 'linear':
+            error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
+            z_next_pred = z_next_pred + error_model
+        else:
+            error_model = None
 
         queries, keys = z_next_pred, z_next_gt
         logits = self.forward.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
-        contrastive_loss = self.cross_entropy_loss(logits, labels)
+        loss = self.cross_entropy_loss(logits, labels)
 
-        # loss = contrastive_loss + self.fdm_error_coef * reg_error_loss
-        loss = contrastive_loss
-
+        self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
         loss.backward()
+        self.encoder_optimizer.step()
         self.forward_optimizer.step()
 
         if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', contrastive_loss, step)
-            L.log('train_dynamic/error_model', error_model.abs().mean(), step)
-            # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
+            L.log('train_dynamic/contrastive_loss', loss, step)
+            if self.fdm_arch == 'linear':
+                L.log('train_dynamic/error_model', error_model.abs().mean(), step)
         self.forward.log(L, step)
+
+    def update_encoder(self, obs, next_obs, action, reward, L, step):
+        if self.enc_fw_e2e:
+            self.update_fw_e2e(obs, next_obs, action, reward, L, step)
+        else:
+            self.update_fw_alt(obs, next_obs, action, reward, L, step)
 
     def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
         with torch.no_grad():
@@ -807,19 +706,7 @@ class SacFbiAgent(object):
             )
 
         if step % self.fdm_update_freq == 0:
-            # print('[INFO] Training with: Forward model')
-            if self.fdm_arch == 'non_linear':
-                if not self.enc_fw_e2e:
-                    self.update_forward_v1(obs, next_obs, action, reward, L, step)
-                else:
-                    self.update_forward_v1_1(obs, next_obs, action, reward, L, step)
-            elif self.fdm_arch == 'linear':
-                if not self.enc_fw_e2e:
-                    self.update_forward_v2(obs, next_obs, action, reward, L, step)
-                else:
-                    self.update_forward_v2_1(obs, next_obs, action, reward, L, step)
-            else:
-                assert 'Error'
+            self.update_encoder(obs, next_obs, action, reward, L, step)
 
 
     def save(self, model_dir, step):

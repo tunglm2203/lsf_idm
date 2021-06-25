@@ -338,8 +338,6 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
             fdm_update_freq=args.fdm_update_freq,
-            bdm_update_freq=args.bdm_update_freq,
-            idm_update_freq=args.idm_update_freq,
             fdm_lr=args.fdm_lr,
             no_aug=args.cpm_noaug,
             target_entropy=args.target_entropy,
@@ -347,7 +345,6 @@ def make_agent(obs_shape, action_shape, args, device):
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
             fdm_error_coef=args.fdm_error_coef,
-            action_repeat=args.action_repeat,
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
