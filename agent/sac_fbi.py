@@ -219,37 +219,41 @@ class ForwardModel(nn.Module):
     CURL
     """
 
-    def __init__(self, obs_shape, action_shape, z_dim, critic, critic_target, hidden_dim,
-                 encoder_type, encoder_feature_dim, num_layers, num_filters,
-                 arch):
+    def __init__(self, obs_shape, action_shape, z_dim, a_emb_dim, critic, critic_target,
+                 arch, use_act_encoder=True):
         super(ForwardModel, self).__init__()
 
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
         self.hidden_dim = 50
-        self.act_emb_dim = 50
+        self.arch = arch
 
-        self.act_encoder = nn.Sequential(
-            nn.Linear(action_shape[0], self.encoder.feature_dim), nn.ReLU(),
-            nn.Linear(self.encoder.feature_dim, self.act_emb_dim)
-        )
+        if use_act_encoder:
+            self.act_emb_dim = 50
+            self.act_encoder = nn.Sequential(
+                nn.Linear(action_shape[0], self.hidden_dim), nn.ReLU(),
+                nn.Linear(self.hidden_dim, self.act_emb_dim)
+            )
+        else:
+            self.act_emb_dim = action_shape[0]
+            self.act_encoder = None
 
         print('[INFO] Forward model architecture: ', arch)
         if arch == 'non_linear':
             self.forward_predictor = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
+                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, self.hidden_dim),
+                nn.Linear(self.hidden_dim, z_dim),
             )
             self.error_model = None
         elif arch == 'linear':
             self.forward_predictor = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim + self.act_emb_dim, self.hidden_dim)
+                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim)
             )
             self.error_model = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
+                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
                 nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, self.hidden_dim)
+                nn.Linear(self.hidden_dim, z_dim)
             )
         else:
             assert 'Not support architecture: ', arch
@@ -258,6 +262,59 @@ class ForwardModel(nn.Module):
         # self.act_encoder.apply(weight_init)
         # self.forward_predictor.apply(weight_init)
         self.outputs = dict()
+
+    def forward(self, z, a):
+        if self.act_encoder is not None:
+            u = self.act_encoder(a)
+        else:
+            u = a
+        z_u_concat = torch.cat((z, u), dim=1)
+        z_next = self.forward_predictor(z_u_concat)
+        if self.arch == 'linear':
+            error_model = self.error_model(z_u_concat)
+            z_next = z_next + error_model
+        else:
+            z_next = z_next
+            error_model = None
+        return z_next, error_model
+
+    def curvature(self, z, u, delta=0.1, armotized=False):
+        z_alias = z.detach().requires_grad_(True)
+        u_alias = u.detach().requires_grad_(True)
+        eps_z = torch.normal(mean=torch.zeros_like(z), std=torch.empty_like(z).fill_(delta))
+        eps_u = torch.normal(mean=torch.zeros_like(u), std=torch.empty_like(u).fill_(delta))
+
+        z_bar = z_alias + eps_z
+        u_bar = u_alias + eps_u
+
+        z_bar_next_pred = self.forward_predictor(torch.cat((z_bar, u_bar), dim=1))
+        z_alias_next_pred = self.forward_predictor(torch.cat((z_alias, u_alias), dim=1))
+
+        z_dim, u_dim = z.size(1), u.size(1)
+        _, B = self.get_jacobian(self.forward_predictor, z_alias, u_alias)
+        (grad_z, ) = torch.autograd.grad(z_alias_next_pred, z_alias, grad_outputs=eps_z,
+                                         create_graph=True, retain_graph=True)
+        grad_u = torch.bmm(B, eps_u.view(-1, u_dim, 1)).squeeze()
+
+        taylor_error = z_bar_next_pred - (grad_z + grad_u) - z_alias_next_pred
+        cur_loss = torch.mean(torch.sum(taylor_error.pow(2), dim=1))
+        return cur_loss
+
+    @staticmethod
+    def get_jacobian(dynamics, batched_z, batched_u):
+        """
+        compute the jacobian of F(z,a) w.r.t z, a
+        """
+        batch_size = batched_z.size(0)
+        z_dim = batched_z.size(-1)
+
+        z, u = batched_z.unsqueeze(1), batched_u.unsqueeze(1)  # batch_size, 1, input_dim
+        z, u = z.repeat(1, z_dim, 1), u.repeat(1, z_dim, 1)  # batch_size, output_dim, input_dim
+        z_next = dynamics(torch.cat((z, u), dim=2))
+        grad_inp = torch.eye(z_dim).reshape(1, z_dim, z_dim).repeat(batch_size, 1, 1).cuda()
+        all_A, all_B = torch.autograd.grad(z_next, [z, u], grad_outputs=[grad_inp, grad_inp],
+                                           create_graph=True, retain_graph=True)
+        return all_A, all_B
 
     def compute_logits(self, k, q):
         """
@@ -286,11 +343,12 @@ class ForwardModel(nn.Module):
             if isinstance(self.forward_predictor[i], nn.Linear):
                 L.log_param('train_forward_model/fdm%d' % cnt, self.forward_predictor[i], step)
                 cnt += 1
-        cnt = 0
-        for i in range(len(self.act_encoder)):
-            if isinstance(self.act_encoder[i], nn.Linear):
-                L.log_param('train_forward_model/act_emb%d' % cnt, self.act_encoder[i], step)
-                cnt += 1
+        if self.act_encoder is not None:
+            cnt = 0
+            for i in range(len(self.act_encoder)):
+                if isinstance(self.act_encoder[i], nn.Linear):
+                    L.log_param('train_forward_model/act_emb%d' % cnt, self.act_encoder[i], step)
+                    cnt += 1
 
         if self.error_model is not None:
             cnt = 0
@@ -383,6 +441,8 @@ class SacFbiAgent(object):
         self.no_aug = no_aug
         self.use_reg = use_reg
 
+        use_act_encoder = False
+
 
         # self.pi_arch = 'linear'
         # self.q_arch = 'linear'
@@ -442,17 +502,19 @@ class SacFbiAgent(object):
         )
 
         # Forward model scope
-        self.forward = ForwardModel(
-            obs_shape, action_shape, encoder_feature_dim, self.critic, self.critic_target,
-            hidden_dim, encoder_type, encoder_feature_dim, num_layers, num_filters,
-            self.fdm_arch
+        a_emb_dim = 50
+        self.forward_model = ForwardModel(
+            obs_shape, action_shape, encoder_feature_dim, a_emb_dim,
+            self.critic, self.critic_target, self.fdm_arch, use_act_encoder
         ).to(self.device)
 
-        encoder_params = list(self.forward.encoder.parameters()) + [self.forward.W]
-        fdm_params = list(self.forward.forward_predictor.parameters()) + \
-                     list(self.forward.act_encoder.parameters())
+        encoder_params = list(self.forward_model.encoder.parameters()) + [self.forward_model.W]
+        fdm_params = list(self.forward_model.forward_predictor.parameters())
+        if use_act_encoder:
+            fdm_params += list(self.forward_model.act_encoder.parameters())
         if self.fdm_arch == 'linear':
-            fdm_params += list(self.forward.error_model.parameters())
+            fdm_params += list(self.forward_model.error_model.parameters())
+
         self.encoder_optimizer = torch.optim.Adam(encoder_params, lr=encoder_lr)
         self.forward_optimizer = torch.optim.Adam(fdm_params, lr=fdm_lr)
 
@@ -465,7 +527,7 @@ class SacFbiAgent(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
-        self.forward.train(training)
+        self.forward_model.train(training)
 
     @property
     def alpha(self):
@@ -495,19 +557,13 @@ class SacFbiAgent(object):
         assert not self.enc_fw_e2e
         # Step 1: Freeze "obs encoder", learn "act encoder & forward model & error model"
         with torch.no_grad():
-            z_cur = self.forward.encoder(cur_obs).detach()
-            z_next_gt = self.forward.encoder_target(next_obs).detach()
+            z_cur = self.forward_model.encoder(cur_obs).detach()
+            z_next = self.forward_model.encoder_target(next_obs).detach()
 
-        a_cur = self.forward.act_encoder(cur_act)
         # s' = Ws*s + Wa*a + error(s,a)
-        z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        if self.fdm_arch == 'linear':
-            error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
-            z_next_pred = z_next_pred + error_model
-        else:
-            error_model = None
+        z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
-        pred_loss = F.mse_loss(z_next_pred, z_next_gt)
+        pred_loss = F.mse_loss(z_next_pred, z_next)
         if self.fdm_arch == 'linear':
             reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
             fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
@@ -526,18 +582,12 @@ class SacFbiAgent(object):
                 L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
 
         # Step 2: Freeze "act encoder & forward & error model", learn obs encoder
-        z_cur = self.forward.encoder(cur_obs)
-
-        a_cur = self.forward.act_encoder(cur_act)
-        z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        if self.fdm_arch == 'linear':
-            error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
-            z_next_pred = z_next_pred + error_model
+        z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
         # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
-        queries, keys = z_next_pred, z_next_gt
+        queries, keys = z_next_pred, z_next
 
-        logits = self.forward.compute_logits(queries, keys)
+        logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
 
@@ -547,26 +597,20 @@ class SacFbiAgent(object):
 
         if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', loss, step)
-        self.forward.log(L, step)
+        self.forward_model.log(L, step)
 
     def update_fw_e2e(self, cur_obs, next_obs, cur_act, reward, L, step):
         # TODO: Train FDM e2e
         assert self.enc_fw_e2e
-        z_cur = self.forward.encoder(cur_obs)
-        a_cur = self.forward.act_encoder(cur_act)
+        z_cur = self.forward_model.encoder(cur_obs)
         with torch.no_grad():
-            z_next_gt = self.forward.encoder_target(next_obs).detach()
+            z_next = self.forward_model.encoder_target(next_obs).detach()
 
         # s' = Ws*s + Wa*a + error(s,a)
-        z_next_pred = self.forward.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        if self.fdm_arch == 'linear':
-            error_model = self.forward.error_model(torch.cat((z_cur, a_cur), dim=1))
-            z_next_pred = z_next_pred + error_model
-        else:
-            error_model = None
+        z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
-        queries, keys = z_next_pred, z_next_gt
-        logits = self.forward.compute_logits(queries, keys)
+        queries, keys = z_next_pred, z_next
+        logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         loss = self.cross_entropy_loss(logits, labels)
 
@@ -580,11 +624,50 @@ class SacFbiAgent(object):
             L.log('train_dynamic/contrastive_loss', loss, step)
             if self.fdm_arch == 'linear':
                 L.log('train_dynamic/error_model', error_model.abs().mean(), step)
-        self.forward.log(L, step)
+        self.forward_model.log(L, step)
+
+    def update_fw_e2e_curvature(self, cur_obs, next_obs, cur_act, reward, L, step):
+        cur_coef = 1.0
+        assert self.enc_fw_e2e and self.fdm_arch == 'non_linear'
+        z_cur = self.forward_model.encoder(cur_obs)
+        a_cur = self.forward_model.act_encoder(cur_act)
+        with torch.no_grad():
+            z_next_gt = self.forward_model.encoder_target(next_obs).detach()
+
+        # s' = Ws*s + Wa*a + error(s,a)
+        z_next_pred = self.forward_model.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
+        # if self.fdm_arch == 'linear':
+        #     error_model = self.forward_model.error_model(torch.cat((z_cur, a_cur), dim=1))
+        #     z_next_pred = z_next_pred + error_model
+        # else:
+        #     error_model = None
+
+        queries, keys = z_next_pred, z_next_gt
+        logits = self.forward_model.compute_logits(queries, keys)
+        labels = torch.arange(logits.shape[0]).long().to(self.device)
+        contrastive_loss = self.cross_entropy_loss(logits, labels)
+
+        cur_loss = self.forward_model.curvature(z_cur, a_cur)
+
+        loss = contrastive_loss + cur_coef * cur_loss
+
+        self.encoder_optimizer.zero_grad()
+        self.forward_optimizer.zero_grad()
+        loss.backward()
+        self.encoder_optimizer.step()
+        self.forward_optimizer.step()
+
+        if step % self.log_interval == 0:
+            L.log('train_dynamic/contrastive_loss', contrastive_loss, step)
+            L.log('train_dynamic/cur_loss', cur_loss, step)
+            # if self.fdm_arch == 'linear':
+            #     L.log('train_dynamic/error_model', error_model.abs().mean(), step)
+        self.forward_model.log(L, step)
 
     def update_encoder(self, obs, next_obs, action, reward, L, step):
         if self.enc_fw_e2e:
             self.update_fw_e2e(obs, next_obs, action, reward, L, step)
+            # self.update_fw_e2e_curvature(obs, next_obs, action, reward, L, step)
         else:
             self.update_fw_alt(obs, next_obs, action, reward, L, step)
 
