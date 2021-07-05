@@ -60,6 +60,7 @@ def parse_args():
     parser.add_argument('--fdm_arch', default='linear', type=str)
     parser.add_argument('--fdm_error_coef', default=1.0, type=float)
     parser.add_argument('--scheduler_enable', action='store_true')
+    parser.add_argument('--no_act_encoder', action='store_true')
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -345,6 +346,7 @@ def make_agent(obs_shape, action_shape, args, device):
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
             fdm_error_coef=args.fdm_error_coef,
+            use_act_encoder=not args.no_act_encoder
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(

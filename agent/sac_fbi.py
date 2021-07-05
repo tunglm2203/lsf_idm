@@ -426,6 +426,7 @@ class SacFbiAgent(object):
             enc_fw_e2e=False,
             fdm_arch='linear',
             fdm_error_coef=1.0,
+            use_act_encoder=True,
     ):
         self.device = device
         self.discount = discount
@@ -441,7 +442,7 @@ class SacFbiAgent(object):
         self.no_aug = no_aug
         self.use_reg = use_reg
 
-        use_act_encoder = False
+        self.use_act_encoder = use_act_encoder
 
 
         # self.pi_arch = 'linear'
@@ -589,14 +590,16 @@ class SacFbiAgent(object):
 
         logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
-        loss = self.cross_entropy_loss(logits, labels)
+        nce_loss = self.cross_entropy_loss(logits, labels)
+
+        loss = nce_loss
 
         self.encoder_optimizer.zero_grad()
         loss.backward()
         self.encoder_optimizer.step()
 
         if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', loss, step)
+            L.log('train_dynamic/contrastive_loss', nce_loss, step)
         self.forward_model.log(L, step)
 
     def update_fw_e2e(self, cur_obs, next_obs, cur_act, reward, L, step):
@@ -609,10 +612,18 @@ class SacFbiAgent(object):
         # s' = Ws*s + Wa*a + error(s,a)
         z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
+        # pred_loss = F.mse_loss(z_next_pred, z_next)
+        # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
+        # fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
+        # fdm_loss = pred_loss
+
         queries, keys = z_next_pred, z_next
         logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
-        loss = self.cross_entropy_loss(logits, labels)
+        nce_loss = self.cross_entropy_loss(logits, labels)
+
+        loss = nce_loss
+        # loss = nce_loss + fdm_loss
 
         self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
@@ -621,9 +632,11 @@ class SacFbiAgent(object):
         self.forward_optimizer.step()
 
         if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', loss, step)
+            L.log('train_dynamic/contrastive_loss', nce_loss, step)
             if self.fdm_arch == 'linear':
                 L.log('train_dynamic/error_model', error_model.abs().mean(), step)
+                # L.log('train_dynamic/pred_loss', fdm_loss, step)
+                # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
         self.forward_model.log(L, step)
 
     def update_fw_e2e_curvature(self, cur_obs, next_obs, cur_act, reward, L, step):
