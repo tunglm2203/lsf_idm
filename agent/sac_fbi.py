@@ -583,7 +583,8 @@ class SacFbiAgent(object):
                 L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
 
         # Step 2: Freeze "act encoder & forward & error model", learn obs encoder
-        z_next_pred, error_model = self.forward_model(z_cur, cur_act)
+        z_cur = self.forward_model.encoder(cur_obs)
+        z_next_pred, _ = self.forward_model(z_cur, cur_act)
 
         # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
         queries, keys = z_next_pred, z_next
