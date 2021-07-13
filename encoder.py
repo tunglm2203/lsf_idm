@@ -68,10 +68,10 @@ class PixelEncoder(nn.Module):
         h = conv.view(conv.size(0), -1)
         return h
 
-    def forward(self, obs, detach=False):
+    def forward(self, obs, detach=False, detach_mlp=False):
         h = self.forward_conv(obs)
 
-        if detach:
+        if detach and not detach_mlp:
             h = h.detach()
 
         for i in range(len(self.projectors)):
@@ -81,6 +81,8 @@ class PixelEncoder(nn.Module):
             elif isinstance(self.projectors[i], nn.LayerNorm):
                 self.outputs['ln%s' % (i + 1)] = h
 
+        if detach and detach_mlp:
+            h = h.detach()
         h_norm = h
         if self.output_logits:
             out = h_norm

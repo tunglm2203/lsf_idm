@@ -87,9 +87,10 @@ class Actor(nn.Module):
         self.apply(weight_init)
 
     def forward(
-            self, obs, compute_pi=True, compute_log_pi=True, detach_encoder=False
+            self, obs, compute_pi=True, compute_log_pi=True, detach_encoder=False,
+            detach_mlp=False
     ):
-        obs = self.encoder(obs, detach=detach_encoder)
+        obs = self.encoder(obs, detach=detach_encoder, detach_mlp=detach_mlp)
 
         mu, log_std = self.trunk(obs).chunk(2, dim=-1)
 
@@ -185,9 +186,10 @@ class Critic(nn.Module):
         self.outputs = dict()
         self.apply(weight_init)
 
-    def forward(self, obs, action, detach_encoder=False):
+    def forward(self, obs, action, detach_encoder=False,
+                detach_mlp=False):
         # detach_encoder allows to stop gradient propogation to encoder
-        obs = self.encoder(obs, detach=detach_encoder)
+        obs = self.encoder(obs, detach=detach_encoder, detach_mlp=detach_mlp)
 
         q1 = self.Q1(obs, action)
         q2 = self.Q2(obs, action)
@@ -427,6 +429,7 @@ class SacFbiAgent(object):
             fdm_arch='linear',
             fdm_error_coef=1.0,
             use_act_encoder=True,
+            detach_mlp=False,
     ):
         self.device = device
         self.discount = discount
@@ -443,6 +446,7 @@ class SacFbiAgent(object):
         self.use_reg = use_reg
 
         self.use_act_encoder = use_act_encoder
+        self.detach_mlp = detach_mlp
 
 
         # self.pi_arch = 'linear'
@@ -613,6 +617,7 @@ class SacFbiAgent(object):
         # s' = Ws*s + Wa*a + error(s,a)
         z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
+        pred_error = F.mse_loss(z_next_pred.detach(), z_next)
         # pred_loss = F.mse_loss(z_next_pred, z_next)
         # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
         # fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
@@ -637,6 +642,7 @@ class SacFbiAgent(object):
             if self.fdm_arch == 'linear':
                 L.log('train_dynamic/error_model', error_model.abs().mean(), step)
                 # L.log('train_dynamic/pred_loss', fdm_loss, step)
+                L.log('train_dynamic/pred_error', pred_error, step)
                 # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
         self.forward_model.log(L, step)
 
@@ -693,7 +699,8 @@ class SacFbiAgent(object):
             target_Q = reward + (not_done * self.discount * target_V)
 
         # get current Q estimates
-        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
+        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder,
+                                             detach_mlp=self.detach_mlp)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
         if step % self.log_interval == 0:
@@ -740,8 +747,8 @@ class SacFbiAgent(object):
 
     def update_actor_and_alpha(self, obs, L, step):
         # detach encoder, so we don't update it with the actor loss
-        _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True)
-        actor_Q1, actor_Q2 = self.critic(obs, pi, detach_encoder=True)
+        _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True, detach_mlp=False)
+        actor_Q1, actor_Q2 = self.critic(obs, pi, detach_encoder=True, detach_mlp=True)
 
         actor_Q = torch.min(actor_Q1, actor_Q2)
         actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
