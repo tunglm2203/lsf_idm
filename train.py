@@ -54,7 +54,6 @@ def parse_args():
     parser.add_argument('--cpm_noaug', action='store_true', default=False)
     # Linearized FDM
     parser.add_argument('--fdm_lr', default=1e-3, type=float)
-    parser.add_argument('--target_entropy', default='dimA', type=str)
     parser.add_argument('--use_reg', action='store_true')
     parser.add_argument('--enc_fw_e2e', action='store_true')
     parser.add_argument('--fdm_arch', default='linear', type=str)
@@ -341,7 +340,6 @@ def make_agent(obs_shape, action_shape, args, device):
             fdm_update_freq=args.fdm_update_freq,
             fdm_lr=args.fdm_lr,
             no_aug=args.cpm_noaug,
-            target_entropy=args.target_entropy,
             use_reg=args.use_reg,
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,

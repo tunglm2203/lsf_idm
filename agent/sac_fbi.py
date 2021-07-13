@@ -423,7 +423,6 @@ class SacFbiAgent(object):
             log_interval=100,
             detach_encoder=False,
             no_aug=False,
-            target_entropy='dimA',
             use_reg=False,
             enc_fw_e2e=False,
             fdm_arch='linear',
@@ -447,6 +446,7 @@ class SacFbiAgent(object):
 
         self.use_act_encoder = use_act_encoder
         self.detach_mlp = detach_mlp
+        self.act_emb_dim = 50
 
 
         # self.pi_arch = 'linear'
@@ -486,12 +486,7 @@ class SacFbiAgent(object):
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True
         # set target entropy to -|A|
-        if target_entropy == 'dimA':
-            self.target_entropy = -np.prod(action_shape)
-        elif target_entropy == 'dimA2':
-            self.target_entropy = -np.prod(action_shape)/2
-        else:
-            self.target_entropy = None
+        self.target_entropy = -np.prod(action_shape)
 
         # optimizers
         self.actor_optimizer = torch.optim.Adam(
@@ -507,9 +502,8 @@ class SacFbiAgent(object):
         )
 
         # Forward model scope
-        a_emb_dim = 50
         self.forward_model = ForwardModel(
-            obs_shape, action_shape, encoder_feature_dim, a_emb_dim,
+            obs_shape, action_shape, encoder_feature_dim, self.act_emb_dim,
             self.critic, self.critic_target, self.fdm_arch, use_act_encoder
         ).to(self.device)
 
