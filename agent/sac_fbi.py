@@ -7,6 +7,7 @@ import math
 
 import utils
 from encoder import make_encoder
+from model.transition_model import make_transition_model
 
 LOG_FREQ = 10000
 
@@ -42,13 +43,6 @@ def weight_init(m):
         mid = m.weight.size(2) // 2
         gain = nn.init.calculate_gain('relu')
         nn.init.orthogonal_(m.weight.data[:, :, mid, mid], gain)
-
-
-
-def tie_weights(src, trg):
-    assert type(src) == type(trg)
-    trg.weight = src.weight
-    trg.bias = src.bias
 
 
 class Actor(nn.Module):
@@ -174,8 +168,7 @@ class Critic(nn.Module):
             num_filters, output_logits=True
         )
 
-        print('[INFO] Critic_1 architecture: ', arch)
-        print('[INFO] Critic_2 architecture: ', arch)
+        print('[INFO] Critic architecture: ', arch)
         self.Q1 = QFunction(
             self.encoder.feature_dim, action_shape[0], hidden_dim, arch
         )
@@ -216,180 +209,6 @@ class Critic(nn.Module):
                 cnt += 1
 
 
-class ForwardModel(nn.Module):
-    """
-    CURL
-    """
-
-    def __init__(self, obs_shape, action_shape, z_dim, a_emb_dim, critic, critic_target,
-                 arch, use_act_encoder=True):
-        super(ForwardModel, self).__init__()
-
-        self.encoder = critic.encoder
-        self.encoder_target = critic_target.encoder
-        self.hidden_dim = 50
-        self.arch = arch
-
-        if use_act_encoder:
-            self.act_emb_dim = 50
-            self.act_encoder = nn.Sequential(
-                nn.Linear(action_shape[0], self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, self.act_emb_dim)
-            )
-        else:
-            self.act_emb_dim = action_shape[0]
-            self.act_encoder = None
-
-        print('[INFO] Forward model architecture: ', arch)
-        if arch == 'non_linear':
-            self.forward_predictor = nn.Sequential(
-                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, z_dim),
-            )
-            self.error_model = None
-        elif arch == 'linear':
-            self.forward_predictor = nn.Sequential(
-                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim)
-            )
-            self.error_model = nn.Sequential(
-                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, self.hidden_dim), nn.ReLU(),
-                nn.Linear(self.hidden_dim, z_dim)
-            )
-        else:
-            assert 'Not support architecture: ', arch
-
-        self.W = nn.Parameter(torch.rand(z_dim, z_dim))
-        # self.act_encoder.apply(weight_init)
-        # self.forward_predictor.apply(weight_init)
-        self.outputs = dict()
-
-    def forward(self, z, a):
-        if self.act_encoder is not None:
-            u = self.act_encoder(a)
-        else:
-            u = a
-        z_u_concat = torch.cat((z, u), dim=1)
-        z_next = self.forward_predictor(z_u_concat)
-        if self.arch == 'linear':
-            error_model = self.error_model(z_u_concat)
-            z_next = z_next + error_model
-        else:
-            z_next = z_next
-            error_model = None
-        return z_next, error_model
-
-    def curvature(self, z, u, delta=0.1, armotized=False):
-        z_alias = z.detach().requires_grad_(True)
-        u_alias = u.detach().requires_grad_(True)
-        eps_z = torch.normal(mean=torch.zeros_like(z), std=torch.empty_like(z).fill_(delta))
-        eps_u = torch.normal(mean=torch.zeros_like(u), std=torch.empty_like(u).fill_(delta))
-
-        z_bar = z_alias + eps_z
-        u_bar = u_alias + eps_u
-
-        z_bar_next_pred = self.forward_predictor(torch.cat((z_bar, u_bar), dim=1))
-        z_alias_next_pred = self.forward_predictor(torch.cat((z_alias, u_alias), dim=1))
-
-        z_dim, u_dim = z.size(1), u.size(1)
-        _, B = self.get_jacobian(self.forward_predictor, z_alias, u_alias)
-        (grad_z, ) = torch.autograd.grad(z_alias_next_pred, z_alias, grad_outputs=eps_z,
-                                         create_graph=True, retain_graph=True)
-        grad_u = torch.bmm(B, eps_u.view(-1, u_dim, 1)).squeeze()
-
-        taylor_error = z_bar_next_pred - (grad_z + grad_u) - z_alias_next_pred
-        cur_loss = torch.mean(torch.sum(taylor_error.pow(2), dim=1))
-        return cur_loss
-
-    @staticmethod
-    def get_jacobian(dynamics, batched_z, batched_u):
-        """
-        compute the jacobian of F(z,a) w.r.t z, a
-        """
-        batch_size = batched_z.size(0)
-        z_dim = batched_z.size(-1)
-
-        z, u = batched_z.unsqueeze(1), batched_u.unsqueeze(1)  # batch_size, 1, input_dim
-        z, u = z.repeat(1, z_dim, 1), u.repeat(1, z_dim, 1)  # batch_size, output_dim, input_dim
-        z_next = dynamics(torch.cat((z, u), dim=2))
-        grad_inp = torch.eye(z_dim).reshape(1, z_dim, z_dim).repeat(batch_size, 1, 1).cuda()
-        all_A, all_B = torch.autograd.grad(z_next, [z, u], grad_outputs=[grad_inp, grad_inp],
-                                           create_graph=True, retain_graph=True)
-        return all_A, all_B
-
-    def compute_logits(self, k, q):
-        """
-        Uses logits trick for CURL:
-        - compute (B,B) matrix z_a (W z_pos.T)
-        - positives are all diagonal elements
-        - negatives are all other elements
-        - to compute loss use multiclass cross entropy with identity matrix for labels
-        """
-        Wz = torch.matmul(self.W, q.T)  # (z_dim,B)
-        logits = torch.matmul(k, Wz)  # (B,B)
-        logits = logits - torch.max(logits, 1)[0][:, None]
-        return logits
-
-    def log(self, L, step, log_freq=LOG_FREQ):
-        if step % log_freq != 0:
-            return
-
-        self.encoder.log(L, step, log_freq)
-
-        for k, v in self.outputs.items():
-            L.log_histogram('train_forward_model/%s_hist' % k, v, step)
-
-        cnt = 0
-        for i in range(len(self.forward_predictor)):
-            if isinstance(self.forward_predictor[i], nn.Linear):
-                L.log_param('train_forward_model/fdm%d' % cnt, self.forward_predictor[i], step)
-                cnt += 1
-        if self.act_encoder is not None:
-            cnt = 0
-            for i in range(len(self.act_encoder)):
-                if isinstance(self.act_encoder[i], nn.Linear):
-                    L.log_param('train_forward_model/act_emb%d' % cnt, self.act_encoder[i], step)
-                    cnt += 1
-
-        if self.error_model is not None:
-            cnt = 0
-            for i in range(len(self.error_model)):
-                if isinstance(self.error_model[i], nn.Linear):
-                    L.log_param('train_forward_model/err_model%d' % cnt, self.error_model[i], step)
-                    cnt += 1
-
-
-def lerp(global_step, start_step, end_step, start_val, end_val):
-    assert end_step > start_step, "end_step must be larger start_step: %d <= %d" % \
-                                  (end_step, start_step)
-    interp = (global_step - start_step) / (end_step - start_step)
-    interp = np.maximum(0.0, np.minimum(1.0, interp))
-    weight = start_val * (1.0 - interp) + end_val * interp
-    return weight
-
-
-def subexpd_np(step, start_d, start_v, d_decay_rate, v_decay_rate, start_t=0,
-               stair=False):
-    step -= start_t
-    exp = np.log(-np.log(d_decay_rate) * step / start_d + 1) / -np.log(d_decay_rate)
-    if stair:
-        exp = np.floor(exp)
-    return start_v * v_decay_rate ** exp
-
-
-def subexpd(global_step, start_step, end_step, start_val, end_val,
-            warmup=True, start_t=0, stair=True):
-  """Sub-exponential decay function. Duration decay is sqrt(decay)."""
-  if warmup and start_step == 0:
-    return lerp(global_step, start_step, end_step, start_val, end_val)
-  decay_steps = end_step - start_step
-  decay_factor = end_val
-  d_decay_factor = np.sqrt(decay_factor)
-  step = global_step - start_step
-  return subexpd_np(step, decay_steps, start_val, d_decay_factor, decay_factor, start_t)
-
-
 class SacFbiAgent(object):
     """CURL representation learning with SAC."""
 
@@ -421,14 +240,15 @@ class SacFbiAgent(object):
             num_filters=32,
             fdm_update_freq=1,
             log_interval=100,
-            detach_encoder=False,
             no_aug=False,
             use_reg=False,
             enc_fw_e2e=False,
             fdm_arch='linear',
             fdm_error_coef=1.0,
             use_act_encoder=True,
+            detach_encoder=False,
             detach_mlp=False,
+            share_mlp_ac=False
     ):
         self.device = device
         self.discount = discount
@@ -446,7 +266,8 @@ class SacFbiAgent(object):
 
         self.use_act_encoder = use_act_encoder
         self.detach_mlp = detach_mlp
-        self.act_emb_dim = 50
+        self.u_dim = 50
+        self.share_mlp_ac = share_mlp_ac
 
 
         # self.pi_arch = 'linear'
@@ -482,6 +303,8 @@ class SacFbiAgent(object):
 
         # tie encoders between actor and critic, and CURL and critic
         self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
+        if self.share_mlp_ac:
+            self.actor.encoder.copy_projector_weights_from(self.critic.encoder)
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True
@@ -502,10 +325,12 @@ class SacFbiAgent(object):
         )
 
         # Forward model scope
-        self.forward_model = ForwardModel(
-            obs_shape, action_shape, encoder_feature_dim, self.act_emb_dim,
+        fdm_type = 'deterministic'
+        self.forward_model = make_transition_model(fdm_type,
+            obs_shape, action_shape, encoder_feature_dim, self.u_dim,
             self.critic, self.critic_target, self.fdm_arch, use_act_encoder
-        ).to(self.device)
+        )
+        self.forward_model = self.forward_model.to(self.device)
 
         encoder_params = list(self.forward_model.encoder.parameters()) + [self.forward_model.W]
         fdm_params = list(self.forward_model.forward_predictor.parameters())
@@ -707,41 +532,10 @@ class SacFbiAgent(object):
 
         self.critic.log(L, step)
 
-    def update_critic_drq(self, obs, obs_aug, action, reward,
-                          next_obs, next_obs_aug, not_done, L, step):
-        with torch.no_grad():
-            _, policy_action, log_pi, _ = self.actor(next_obs)
-            target_Q1, target_Q2 = self.critic_target(next_obs, policy_action)
-            target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi
-            target_Q = reward + (not_done * self.discount * target_V)
-
-            _, policy_action_aug, log_pi_aug, _ = self.actor(next_obs_aug)
-            target_Q1, target_Q2 = self.critic_target(next_obs_aug, policy_action_aug)
-            target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_pi_aug
-            target_Q_aug = reward + (not_done * self.discount * target_V)
-
-            target_Q = (target_Q + target_Q_aug) / 2
-
-        # get current Q estimates
-        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
-
-        Q1_aug, Q2_aug = self.critic(obs_aug, action, detach_encoder=self.detach_encoder)
-        critic_loss += F.mse_loss(Q1_aug, target_Q) + F.mse_loss(Q2_aug, target_Q)
-
-        if step % self.log_interval == 0:
-            L.log('train_critic/loss', critic_loss, step)
-
-        # Optimize the critic
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-
-        self.critic.log(L, step)
-
     def update_actor_and_alpha(self, obs, L, step):
         # detach encoder, so we don't update it with the actor loss
-        _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True, detach_mlp=False)
+        detach_mlp = True if self.share_mlp_ac else False
+        _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True, detach_mlp=detach_mlp)
         actor_Q1, actor_Q2 = self.critic(obs, pi, detach_encoder=True, detach_mlp=True)
 
         actor_Q = torch.min(actor_Q1, actor_Q2)
@@ -773,20 +567,12 @@ class SacFbiAgent(object):
         self.log_alpha_optimizer.step()
 
     def update(self, replay_buffer, L, step):
-        if self.use_reg:
-            obs_aug, action, reward, next_obs_aug, not_done, drq_kwargs = replay_buffer.sample_drq()
-            obs, next_obs = drq_kwargs['obses_origin'], drq_kwargs['next_obses_origin']
-        else:
-            obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(self.no_aug)
+        obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(self.no_aug)
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
-        if self.use_reg:
-            self.update_critic_drq(obs, obs_aug, action, reward,
-                                   next_obs, next_obs_aug, not_done, L, step)
-        else:
-            self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)

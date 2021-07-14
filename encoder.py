@@ -98,6 +98,11 @@ class PixelEncoder(nn.Module):
         for i in range(self.num_layers):
             tie_weights(src=source.convs[i], trg=self.convs[i])
 
+    def copy_projector_weights_from(self, source):
+        for i in range(len(self.projectors)):
+            if isinstance(self.projectors[i], nn.Linear):
+                tie_weights(src=source.projectors[i], trg=self.projectors[i])
+
     def log(self, L, step, log_freq):
         if step % log_freq != 0:
             return

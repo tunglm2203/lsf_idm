@@ -42,7 +42,6 @@ def parse_args():
     parser.add_argument('--rand_color', action='store_true')
 
     parser.add_argument('--pre_transform_image_size', default=100, type=int)
-    parser.add_argument('--detach_encoder', default=False, action='store_true')
     # RAD
     parser.add_argument('--data_augs', default='crop', type=str)
     # CURL
@@ -58,8 +57,11 @@ def parse_args():
     parser.add_argument('--enc_fw_e2e', action='store_true')
     parser.add_argument('--fdm_arch', default='linear', type=str)
     parser.add_argument('--fdm_error_coef', default=1.0, type=float)
-    parser.add_argument('--scheduler_enable', action='store_true')
-    parser.add_argument('--no_act_encoder', action='store_true')
+    parser.add_argument('--no_act_encoder', default=False, action='store_true')
+    parser.add_argument('--detach_encoder', default=False, action='store_true')
+    parser.add_argument('--detach_mlp', default=False, action='store_true')
+    parser.add_argument('--share_mlp_ac', default=False, action='store_true')
+
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -336,7 +338,6 @@ def make_agent(obs_shape, action_shape, args, device):
             num_layers=args.num_layers,
             num_filters=args.num_filters,
             log_interval=args.log_interval,
-            detach_encoder=args.detach_encoder,
             fdm_update_freq=args.fdm_update_freq,
             fdm_lr=args.fdm_lr,
             no_aug=args.cpm_noaug,
@@ -344,7 +345,10 @@ def make_agent(obs_shape, action_shape, args, device):
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
             fdm_error_coef=args.fdm_error_coef,
-            use_act_encoder=not args.no_act_encoder
+            use_act_encoder=not args.no_act_encoder,
+            detach_encoder=args.detach_encoder,
+            detach_mlp=args.detach_mlp,
+            share_mlp_ac=args.share_mlp_ac
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
