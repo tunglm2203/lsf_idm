@@ -97,13 +97,14 @@ class DeterministicForwardModel(nn.Module):
     CURL
     """
 
-    def __init__(self, obs_shape, action_shape, z_dim, u_dim, critic, critic_target,
+    def __init__(self, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
+                 critic, critic_target,
                  arch, use_act_encoder=True):
         super(DeterministicForwardModel, self).__init__()
 
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
-        self.hidden_dim = 50
+        self.hidden_dim = hidden_dim
         self.arch = arch
 
         if use_act_encoder:
@@ -126,7 +127,7 @@ class DeterministicForwardModel(nn.Module):
             self.error_model = None
         elif arch == 'linear':
             self.forward_predictor = nn.Sequential(
-                nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim)
+                nn.Linear(z_dim + self.act_emb_dim, z_dim)
             )
             self.error_model = nn.Sequential(
                 nn.Linear(z_dim + self.act_emb_dim, self.hidden_dim), nn.ReLU(),
@@ -243,10 +244,10 @@ _AVAILABLE_TRANSITION_MODELS = {'': DeterministicForwardModel,
                                 }
 
 
-def make_transition_model(fdm_type, obs_shape, action_shape, z_dim, u_dim,
+def make_transition_model(fdm_type, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
                           critic, critic_target, arch, use_act_encoder=True):
     assert fdm_type in _AVAILABLE_TRANSITION_MODELS
     return _AVAILABLE_TRANSITION_MODELS[fdm_type](
-        obs_shape, action_shape, z_dim, u_dim,
+        obs_shape, action_shape, z_dim, u_dim, hidden_dim,
         critic, critic_target, arch, use_act_encoder
     )
