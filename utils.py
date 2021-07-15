@@ -73,7 +73,7 @@ def make_logdir(args):
     ts = time.localtime()
     ts = time.strftime("%m_%d-%H_%M_%S", ts)
     env_dir = args.domain_name + '-' + args.task_name
-    subdir = args.encoder_type[:3] + str(args.image_size) + '-s' + str(args.seed) + ts
+    subdir = args.encoder_type[:3] + str(args.image_size) + '-s' + str(args.seed) + '-' + ts
     exp_name = os.path.join(env_dir, args.exp, args.exp, subdir)
 
     args.work_dir = args.work_dir + '/' + exp_name
