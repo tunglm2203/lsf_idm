@@ -71,18 +71,10 @@ def preprocess_obs(obs, bits=5):
 def make_logdir(args):
     # make directory
     ts = time.localtime()
-    ts = time.strftime("%m-%d-%H-%M-%S", ts)
-    env_name = args.domain_name + '-' + args.task_name
-    if args.encoder_type == 'pixel':
-        exp_name = env_name + '/' + args.exp + '/' + 'img' + str(args.image_size) + \
-                   '-b' + str(args.batch_size) + '-s' + str(args.seed) + \
-                   '-' + args.encoder_type + '-' + ts
-    elif args.encoder_type == 'identity':
-        exp_name = env_name + '/' + args.exp + '/' + 'state' + \
-                   '-b' + str(args.batch_size) + '-s' + str(args.seed) + \
-                   '-' + args.encoder_type + '-' + ts
-    else:
-        raise NotImplementedError('Not support: {}'.format(args.encoder_type))
+    ts = time.strftime("%m_%d-%H_%M_%S", ts)
+    env_dir = args.domain_name + '-' + args.task_name
+    subdir = args.encoder_type[:3] + str(args.image_size) + '-s' + str(args.seed) + ts
+    exp_name = os.path.join(env_dir, args.exp, args.exp, subdir)
 
     args.work_dir = args.work_dir + '/' + exp_name
 
