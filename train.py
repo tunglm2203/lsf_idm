@@ -340,7 +340,7 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             fdm_update_freq=args.fdm_update_freq,
             fdm_lr=args.fdm_lr,
-            use_aug=args.cpm_noaug,
+            use_aug=not args.cpm_noaug,
             use_reg=args.use_reg,
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
