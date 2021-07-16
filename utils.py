@@ -119,18 +119,20 @@ class CurlReplayBuffer(Dataset):
         self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.not_dones = np.empty((capacity, 1), dtype=np.float32)
+        self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
 
         self.idx = 0
         self.last_save = 0
         self.full = False
 
-    def add(self, obs, action, reward, next_obs, done):
+    def add(self, obs, action, reward, next_obs, done, done_no_max):
 
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
         np.copyto(self.next_obses[self.idx], next_obs)
         np.copyto(self.not_dones[self.idx], not done)
+        np.copyto(self.not_dones_no_max[self.idx], not done_no_max)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
@@ -151,7 +153,9 @@ class CurlReplayBuffer(Dataset):
             next_obses, device=self.device
         ).float()
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
-        return obses, actions, rewards, next_obses, not_dones
+        not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
+
+        return obses, actions, rewards, next_obses, not_dones, not_dones_no_max
 
     def sample_cpc(self, no_aug=False):
 
@@ -180,12 +184,13 @@ class CurlReplayBuffer(Dataset):
         actions = torch.as_tensor(self.actions[idxs], device=self.device)
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
 
         pos = torch.as_tensor(pos, device=self.device).float()
         cpc_kwargs = dict(obs_anchor=obses, obs_pos=pos,
                           time_anchor=None, time_pos=None)
 
-        return obses, actions, rewards, next_obses, not_dones, cpc_kwargs
+        return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, cpc_kwargs
 
     def sample_drq(self, no_aug=False):
 
@@ -212,11 +217,12 @@ class CurlReplayBuffer(Dataset):
         actions = torch.as_tensor(self.actions[idxs], device=self.device)
         rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
 
         drq_kwargs = dict(obses_origin=obses_origin, next_obses_origin=next_obses_origin,
                           time_anchor=None, time_pos=None)
 
-        return obses, actions, rewards, next_obses, not_dones, drq_kwargs
+        return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, drq_kwargs
 
     def save(self, save_dir):
         if self.idx == self.last_save:
