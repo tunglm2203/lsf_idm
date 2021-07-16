@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument('--detach_encoder', default=False, action='store_true')
     parser.add_argument('--detach_mlp', default=False, action='store_true')
     parser.add_argument('--share_mlp_ac', default=False, action='store_true')
-
+    parser.add_argument('--use_rew_pred', default=False, action='store_true')
     # Physical prior
     parser.add_argument('--use_prior', default=False, action='store_true')
     # replay buffer
@@ -340,7 +340,7 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             fdm_update_freq=args.fdm_update_freq,
             fdm_lr=args.fdm_lr,
-            no_aug=args.cpm_noaug,
+            use_aug=args.cpm_noaug,
             use_reg=args.use_reg,
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
@@ -348,7 +348,8 @@ def make_agent(obs_shape, action_shape, args, device):
             use_act_encoder=not args.no_act_encoder,
             detach_encoder=args.detach_encoder,
             detach_mlp=args.detach_mlp,
-            share_mlp_ac=args.share_mlp_ac
+            share_mlp_ac=args.share_mlp_ac,
+            use_rew_pred=args.use_rew_pred
         )
     elif args.agent in ['sac_model_analyse']:
         return SacModelAnalyseAgent(
@@ -407,12 +408,12 @@ def make_env(args, mode='train', **kwargs):
     if args.encoder_type == 'identity':
         assert args.agent in ['sac_ae', 'sac_model_analyse'], 'If you use state, please use `sac_ae` agent.'
 
-    if args.agent in ['sac_ae', 'sac_drq', 'sac_model_analyse']:
+    if args.agent in ['sac_ae', 'sac_drq', 'sac_model_analyse', 'sac_fbi']:
         env_args.update(
             height=args.image_size,
             width=args.image_size,
         )
-    elif args.agent in ['sac_curl', 'sac_cpm', 'sac_fbi']:
+    elif args.agent in ['sac_curl', 'sac_cpm']:
         env_args.update(
             height=args.pre_transform_image_size,
             width=args.pre_transform_image_size,
@@ -431,13 +432,13 @@ def make_env(args, mode='train', **kwargs):
 def make_replaybuffer(args, env, device=torch.device('cpu')):
     pre_aug_obs_shape = None
     if args.encoder_type == 'pixel':
-        if args.agent in ['sac_curl', 'sac_cpm', 'sac_fbi']:
+        if args.agent in ['sac_curl', 'sac_cpm']:
             pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
         elif args.agent in ['sac_rad']:
             pre_transform_image_size = args.pre_transform_image_size if 'crop' in args.data_augs else args.image_size
             pre_aug_obs_shape = (3 * args.frame_stack, pre_transform_image_size, pre_transform_image_size)
 
-    if args.agent in ['sac_ae', 'sac_model_analyse']:
+    if args.agent in ['sac_ae', 'sac_model_analyse', 'sac_fbi']:
         return utils.ReplayBuffer(
             obs_shape=env.observation_space.shape,
             action_shape=env.action_space.shape,
@@ -445,7 +446,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
             batch_size=args.batch_size,
             device=device
         )
-    elif args.agent in ['sac_curl', 'sac_cpm', 'sac_fbi']:
+    elif args.agent in ['sac_curl', 'sac_cpm']:
         return utils.CurlReplayBuffer(
             obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
@@ -487,7 +488,13 @@ def main():
     env = make_env(args, mode='train')
     env.seed(args.seed)
     eval_env = make_env(args, mode='train')
-    eval_seed = int(np.random.choice([2, 10]))
+    eval_env_seed = dict(
+        cheetah=[2, 10]
+    )
+    if args.domain_name in eval_env_seed.keys():
+        eval_seed = int(np.random.choice(eval_env_seed[args.domain_name]))
+    else:
+        eval_seed = args.seed
     args.__dict__["eval_seed"] = eval_seed
     eval_env.seed(eval_seed)
 
@@ -590,13 +597,12 @@ def main():
 
         next_obs, reward, done, _ = env.step(action)
 
-        # allow infinit bootstrap
-        done_bool = 0 if episode_step + 1 == env._max_episode_steps else float(
-            done
-        )
+        # allow infinite bootstrap
+        done = float(done)
+        done_no_max = 0 if episode_step + 1 == env._max_episode_steps else float(done)
         episode_reward += reward
 
-        replay_buffer.add(obs, action, reward, next_obs, done_bool)
+        replay_buffer.add(obs, action, reward, next_obs, done, done_no_max)
 
         obs = next_obs
         episode_step += 1

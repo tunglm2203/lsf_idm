@@ -2,47 +2,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import copy
-import math
+import kornia
 
 import utils
-from encoder import make_encoder
+from utils import squash, gaussian_logprob
+from encoder import make_encoder, weight_init
 from model.transition_model import make_transition_model
 
 LOG_FREQ = 10000
-
-
-def gaussian_logprob(noise, log_std):
-    """Compute Gaussian log probability."""
-    residual = (-0.5 * noise.pow(2) - log_std).sum(-1, keepdim=True)
-    return residual - 0.5 * np.log(2 * np.pi) * noise.size(-1)
-
-
-def squash(mu, pi, log_pi):
-    """Apply squashing function.
-    See appendix C from https://arxiv.org/pdf/1812.05905.pdf.
-    """
-    mu = torch.tanh(mu)
-    if pi is not None:
-        pi = torch.tanh(pi)
-    if log_pi is not None:
-        log_pi -= torch.log(F.relu(1 - pi.pow(2)) + 1e-6).sum(-1, keepdim=True)
-    return mu, pi, log_pi
-
-
-def weight_init(m):
-    """Custom weight init for Conv2D and Linear layers."""
-    if isinstance(m, nn.Linear):
-        nn.init.orthogonal_(m.weight.data)
-        m.bias.data.fill_(0.0)
-    elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-        # delta-orthogonal init from https://arxiv.org/pdf/1806.05393.pdf
-        assert m.weight.size(2) == m.weight.size(3)
-        m.weight.data.fill_(0.0)
-        m.bias.data.fill_(0.0)
-        mid = m.weight.size(2) // 2
-        gain = nn.init.calculate_gain('relu')
-        nn.init.orthogonal_(m.weight.data[:, :, mid, mid], gain)
 
 
 class Actor(nn.Module):
@@ -214,41 +181,29 @@ class SacFbiAgent(object):
 
     def __init__(
             self,
-            obs_shape,
-            action_shape,
+            obs_shape, action_shape,
             device,
             hidden_dim=256,
             discount=0.99,
             init_temperature=0.01,
-            alpha_lr=1e-3,
-            alpha_beta=0.9,
-            actor_lr=1e-3,
-            actor_beta=0.9,
-            actor_log_std_min=-10,
-            actor_log_std_max=2,
+            alpha_lr=1e-3, alpha_beta=0.9,
+            actor_lr=1e-3, actor_beta=0.9, actor_log_std_min=-10, actor_log_std_max=2,
             actor_update_freq=2,
-            critic_lr=1e-3,
-            critic_beta=0.9,
-            critic_tau=0.005,
-            critic_target_update_freq=2,
-            encoder_type='pixel',
-            encoder_feature_dim=50,
-            encoder_lr=1e-3,
-            fdm_lr=1e-3,
-            encoder_tau=0.005,
-            num_layers=4,
-            num_filters=32,
-            fdm_update_freq=1,
+            critic_lr=1e-3, critic_beta=0.9, critic_tau=0.005, critic_target_update_freq=2,
+            encoder_type='pixel', encoder_feature_dim=50, num_layers=4, num_filters=32,
+            encoder_lr=1e-3, encoder_tau=0.005,
             log_interval=100,
-            no_aug=False,
+            use_aug=True,
             use_reg=False,
             enc_fw_e2e=False,
+            fdm_update_freq=1, fdm_lr=1e-3,
             fdm_arch='linear',
             fdm_error_coef=1.0,
             use_act_encoder=True,
             detach_encoder=False,
             detach_mlp=False,
-            share_mlp_ac=False
+            share_mlp_ac=False,
+            use_rew_pred=False
     ):
         self.device = device
         self.discount = discount
@@ -261,14 +216,15 @@ class SacFbiAgent(object):
         self.image_size = obs_shape[-1]
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
-        self.no_aug = no_aug
+        self.use_aug = use_aug
         self.use_reg = use_reg
 
         self.use_act_encoder = use_act_encoder
         self.detach_mlp = detach_mlp
         self.u_dim = 50
+        self.fdm_hidden_dim = 50
         self.share_mlp_ac = share_mlp_ac
-
+        self.use_rew_pred = use_rew_pred
 
         # self.pi_arch = 'linear'
         # self.q_arch = 'linear'
@@ -281,7 +237,11 @@ class SacFbiAgent(object):
         self.fdm_error_coef = fdm_error_coef
         self.fdm_update_freq = fdm_update_freq
 
-        print('[INFO] Use augmentation: ', str(not self.no_aug))
+        print('[INFO] Use augmentation: ', str(self.use_aug))
+        self.aug_trans = nn.Sequential(
+            nn.ReplicationPad2d(4),
+            kornia.augmentation.RandomCrop((84, 84))
+        ) if self.use_aug else None
 
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,
@@ -327,10 +287,17 @@ class SacFbiAgent(object):
         # Forward model scope
         fdm_type = 'deterministic'
         self.forward_model = make_transition_model(fdm_type,
-            obs_shape, action_shape, encoder_feature_dim, self.u_dim,
+            obs_shape, action_shape, encoder_feature_dim, self.u_dim, self.fdm_hidden_dim,
             self.critic, self.critic_target, self.fdm_arch, use_act_encoder
         )
         self.forward_model = self.forward_model.to(self.device)
+        # self.forward_model.encoder.copy_conv_weights_from(self.critic.encoder)
+        if self.use_rew_pred:
+            self.reward_decoder = nn.Sequential(
+                nn.Linear(encoder_feature_dim, self.fdm_hidden_dim),
+                nn.LayerNorm(self.fdm_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(self.fdm_hidden_dim, 1)).to(device)
 
         encoder_params = list(self.forward_model.encoder.parameters()) + [self.forward_model.W]
         fdm_params = list(self.forward_model.forward_predictor.parameters())
@@ -338,6 +305,8 @@ class SacFbiAgent(object):
             fdm_params += list(self.forward_model.act_encoder.parameters())
         if self.fdm_arch == 'linear':
             fdm_params += list(self.forward_model.error_model.parameters())
+        if self.use_rew_pred:
+            fdm_params += list(self.reward_decoder.parameters())
 
         self.encoder_optimizer = torch.optim.Adam(encoder_params, lr=encoder_lr)
         self.forward_optimizer = torch.optim.Adam(fdm_params, lr=fdm_lr)
@@ -436,11 +405,13 @@ class SacFbiAgent(object):
         # s' = Ws*s + Wa*a + error(s,a)
         z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
-        pred_error = F.mse_loss(z_next_pred.detach(), z_next)
+        pred_loss = F.mse_loss(z_next_pred.detach(), z_next)
         # pred_loss = F.mse_loss(z_next_pred, z_next)
         # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
         # fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
-        # fdm_loss = pred_loss
+        if self.use_rew_pred:
+            reward_pred = self.reward_decoder(z_next_pred)
+            reward_loss = F.mse_loss(reward_pred, reward)
 
         queries, keys = z_next_pred, z_next
         logits = self.forward_model.compute_logits(queries, keys)
@@ -460,9 +431,11 @@ class SacFbiAgent(object):
             L.log('train_dynamic/contrastive_loss', nce_loss, step)
             if self.fdm_arch == 'linear':
                 L.log('train_dynamic/error_model', error_model.abs().mean(), step)
-                # L.log('train_dynamic/pred_loss', fdm_loss, step)
-                L.log('train_dynamic/pred_error', pred_error, step)
+                # L.log('train_dynamic/pred_error', fdm_loss, step)
                 # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
+                L.log('train_dynamic/pred_error', pred_loss, step)
+            if self.use_rew_pred:
+                L.log('train_dynamic/reward_error', reward_loss, step)
         self.forward_model.log(L, step)
 
     def update_fw_e2e_curvature(self, cur_obs, next_obs, cur_act, reward, L, step):
@@ -567,7 +540,11 @@ class SacFbiAgent(object):
         self.log_alpha_optimizer.step()
 
     def update(self, replay_buffer, L, step):
-        obs, action, reward, next_obs, not_done, _ = replay_buffer.sample_cpc(self.no_aug)
+        obs, action, reward, next_obs, not_done, _ = replay_buffer.sample()
+
+        if self.aug_trans is not None:
+            obs = self.aug_trans(obs)
+            next_obs = self.aug_trans(next_obs)
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
