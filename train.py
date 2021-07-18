@@ -408,12 +408,12 @@ def make_env(args, mode='train', **kwargs):
     if args.encoder_type == 'identity':
         assert args.agent in ['sac_ae', 'sac_model_analyse'], 'If you use state, please use `sac_ae` agent.'
 
-    if args.agent in ['sac_ae', 'sac_drq', 'sac_model_analyse', 'sac_fbi']:
+    if args.agent in ['sac_ae', 'sac_drq', 'sac_model_analyse']:
         env_args.update(
             height=args.image_size,
             width=args.image_size,
         )
-    elif args.agent in ['sac_curl', 'sac_cpm']:
+    elif args.agent in ['sac_curl', 'sac_cpm', 'sac_fbi']:
         env_args.update(
             height=args.pre_transform_image_size,
             width=args.pre_transform_image_size,
@@ -430,9 +430,9 @@ def make_env(args, mode='train', **kwargs):
 
 
 def make_replaybuffer(args, env, device=torch.device('cpu')):
-    pre_aug_obs_shape = None
+    pre_aug_obs_shape = env.observation_space.shape
     if args.encoder_type == 'pixel':
-        if args.agent in ['sac_curl', 'sac_cpm']:
+        if args.agent in ['sac_curl', 'sac_cpm', 'sac_fbi']:
             pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
         elif args.agent in ['sac_rad']:
             pre_transform_image_size = args.pre_transform_image_size if 'crop' in args.data_augs else args.image_size
@@ -440,7 +440,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
 
     if args.agent in ['sac_ae', 'sac_model_analyse', 'sac_fbi']:
         return utils.ReplayBuffer(
-            obs_shape=env.observation_space.shape,
+            obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
             capacity=args.replay_buffer_capacity,
             batch_size=args.batch_size,
@@ -468,7 +468,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
         )
     elif args.agent in ['sac_drq']:
         return utils.DrQReplayBuffer(
-            obs_shape=env.observation_space.shape,
+            obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
             capacity=args.replay_buffer_capacity,
             batch_size=args.batch_size,

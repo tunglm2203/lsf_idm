@@ -238,10 +238,10 @@ class SacFbiAgent(object):
         self.fdm_update_freq = fdm_update_freq
 
         print('[INFO] Use augmentation: ', str(self.use_aug))
-        self.aug_trans = nn.Sequential(
-            nn.ReplicationPad2d(4),
-            kornia.augmentation.RandomCrop((84, 84))
-        ) if self.use_aug else None
+        # if self.use_aug:
+        self.aug_trans = nn.Sequential(kornia.augmentation.RandomCrop((84, 84)))
+        # else:
+        #     self.aug_trans = nn.Sequential(kornia.augmentation.CenterCrop((84, 84)))
 
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,
@@ -540,11 +540,10 @@ class SacFbiAgent(object):
         self.log_alpha_optimizer.step()
 
     def update(self, replay_buffer, L, step):
-        obs, action, reward, next_obs, not_done, _ = replay_buffer.sample()
+        obs, action, reward, next_obs, _, not_done = replay_buffer.sample()
 
-        if self.aug_trans is not None:
-            obs = self.aug_trans(obs)
-            next_obs = self.aug_trans(next_obs)
+        obs = self.aug_trans(obs)
+        next_obs = self.aug_trans(next_obs)
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
