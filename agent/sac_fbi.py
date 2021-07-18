@@ -238,10 +238,10 @@ class SacFbiAgent(object):
         self.fdm_update_freq = fdm_update_freq
 
         print('[INFO] Use augmentation: ', str(self.use_aug))
-        # if self.use_aug:
-        self.aug_trans = nn.Sequential(kornia.augmentation.RandomCrop((84, 84)))
-        # else:
-        #     self.aug_trans = nn.Sequential(kornia.augmentation.CenterCrop((84, 84)))
+        if self.use_aug:
+            self.aug_trans = nn.Sequential(kornia.augmentation.RandomCrop((84, 84)))
+        else:
+            self.aug_trans = nn.Sequential(kornia.augmentation.CenterCrop((84, 84)))
 
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,
