@@ -199,7 +199,7 @@ class SacFbiAgent(object):
             fdm_update_freq=1, fdm_lr=1e-3,
             fdm_arch='linear',
             fdm_error_coef=1.0,
-            use_act_encoder=True,
+            use_act_encoder=False,
             detach_encoder=False,
             detach_mlp=False,
             share_mlp_ac=False,

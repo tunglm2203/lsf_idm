@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument('--enc_fw_e2e', action='store_true')
     parser.add_argument('--fdm_arch', default='linear', type=str)
     parser.add_argument('--fdm_error_coef', default=1.0, type=float)
-    parser.add_argument('--no_act_encoder', default=False, action='store_true')
+    parser.add_argument('--use_act_encoder', default=False, action='store_true')
     parser.add_argument('--detach_encoder', default=False, action='store_true')
     parser.add_argument('--detach_mlp', default=False, action='store_true')
     parser.add_argument('--share_mlp_ac', default=False, action='store_true')
@@ -345,7 +345,7 @@ def make_agent(obs_shape, action_shape, args, device):
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
             fdm_error_coef=args.fdm_error_coef,
-            use_act_encoder=not args.no_act_encoder,
+            use_act_encoder=args.use_act_encoder,
             detach_encoder=args.detach_encoder,
             detach_mlp=args.detach_mlp,
             share_mlp_ac=args.share_mlp_ac,
