@@ -99,9 +99,11 @@ class DeterministicForwardModel(nn.Module):
 
     def __init__(self, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
                  critic, critic_target,
-                 arch, use_act_encoder=True):
+                 arch, use_act_encoder=True, sim_metric='inner'):
         super(DeterministicForwardModel, self).__init__()
 
+        assert sim_metric in ['inner', 'bilinear']
+        self.sim_metric = sim_metric
         self.encoder = critic.encoder
         self.encoder_target = critic_target.encoder
         self.hidden_dim = hidden_dim
@@ -137,7 +139,10 @@ class DeterministicForwardModel(nn.Module):
         else:
             assert 'Not support architecture: ', arch
 
-        self.W = nn.Parameter(torch.rand(z_dim, z_dim))
+        if self.sim_metric == 'bilinear':
+            self.W = nn.Parameter(torch.rand(z_dim, z_dim))
+        else:
+            self.W = None
         # self.act_encoder.apply(weight_init)
         # self.forward_predictor.apply(weight_init)
         self.outputs = dict()
@@ -203,9 +208,15 @@ class DeterministicForwardModel(nn.Module):
         - negatives are all other elements
         - to compute loss use multiclass cross entropy with identity matrix for labels
         """
-        Wz = torch.matmul(self.W, q.T)  # (z_dim,B)
-        logits = torch.matmul(k, Wz)  # (B,B)
-        logits = logits - torch.max(logits, 1)[0][:, None]
+        if self.sim_metric == 'bilinear':
+            Wz = torch.matmul(self.W, q.T)  # (z_dim,B)
+            logits = torch.matmul(k, Wz)  # (B,B)
+        elif self.sim_metric == 'inner':
+            logits = torch.matmul(k, q.T)
+        else:
+            logits = None
+
+        logits = logits - torch.max(logits, 1)[0][:, None]  # subtract max from logits for stability
         return logits
 
     def log(self, L, step, log_freq=LOG_FREQ):
@@ -245,9 +256,9 @@ _AVAILABLE_TRANSITION_MODELS = {'': DeterministicForwardModel,
 
 
 def make_transition_model(fdm_type, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
-                          critic, critic_target, arch, use_act_encoder=True):
+                          critic, critic_target, arch, use_act_encoder=True, sim_metric='bilinear'):
     assert fdm_type in _AVAILABLE_TRANSITION_MODELS
     return _AVAILABLE_TRANSITION_MODELS[fdm_type](
         obs_shape, action_shape, z_dim, u_dim, hidden_dim,
-        critic, critic_target, arch, use_act_encoder
+        critic, critic_target, arch, use_act_encoder, sim_metric
     )

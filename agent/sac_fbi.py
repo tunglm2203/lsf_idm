@@ -225,6 +225,7 @@ class SacFbiAgent(object):
         self.fdm_hidden_dim = 50
         self.share_mlp_ac = share_mlp_ac
         self.use_rew_pred = use_rew_pred
+        self.sim_metric = 'inner'
 
         # self.pi_arch = 'linear'
         # self.q_arch = 'linear'
@@ -288,7 +289,7 @@ class SacFbiAgent(object):
         fdm_type = 'deterministic'
         self.forward_model = make_transition_model(fdm_type,
             obs_shape, action_shape, encoder_feature_dim, self.u_dim, self.fdm_hidden_dim,
-            self.critic, self.critic_target, self.fdm_arch, use_act_encoder
+            self.critic, self.critic_target, self.fdm_arch, use_act_encoder, self.sim_metric
         )
         self.forward_model = self.forward_model.to(self.device)
         # self.forward_model.encoder.copy_conv_weights_from(self.critic.encoder)
@@ -299,7 +300,10 @@ class SacFbiAgent(object):
                 nn.ReLU(),
                 nn.Linear(self.fdm_hidden_dim, 1)).to(device)
 
-        encoder_params = list(self.forward_model.encoder.parameters()) + [self.forward_model.W]
+        encoder_params = list(self.forward_model.encoder.parameters())
+        if self.sim_metric == 'bilinear':
+            encoder_params += [self.forward_model.W]
+
         fdm_params = list(self.forward_model.forward_predictor.parameters())
         if use_act_encoder:
             fdm_params += list(self.forward_model.act_encoder.parameters())
@@ -395,6 +399,23 @@ class SacFbiAgent(object):
             L.log('train_dynamic/contrastive_loss', nce_loss, step)
         self.forward_model.log(L, step)
 
+    def covariance_loss(self, z):
+        N, D = z.shape
+
+        z = z - z.mean(dim=0)
+        cov_z = z.T.matmul(z) / (N - 1)
+
+        diag = torch.eye(D, device=z.device)
+        cov_loss = cov_z[~diag.bool()].pow_(2).sum() / D
+        diag_cov = cov_z[diag.bool()].detach().sum() / D
+        return cov_loss, diag_cov
+
+    def variance_loss(self, z):
+        eps = 1e-4
+        std_z = torch.sqrt(z.var(dim=0) + eps)
+        std_loss = torch.mean(F.relu(1 - std_z))
+        return std_loss, torch.mean(z.detach().std(dim=0))
+
     def update_fw_e2e(self, cur_obs, next_obs, cur_act, reward, L, step):
         # TODO: Train FDM e2e
         assert self.enc_fw_e2e
@@ -402,17 +423,24 @@ class SacFbiAgent(object):
         with torch.no_grad():
             z_next = self.forward_model.encoder_target(next_obs).detach()
 
-        # s' = Ws*s + Wa*a + error(s,a)
+        # TODO: Predict next state
         z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
-        pred_loss = F.mse_loss(z_next_pred.detach(), z_next)
-        # pred_loss = F.mse_loss(z_next_pred, z_next)
+        # TODO: Compute error of next state prediction
+        fdm_loss = F.mse_loss(z_next_pred.detach(), z_next)
+        # fdm_loss = F.mse_loss(z_next_pred, z_next)
         # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
-        # fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
+        # fdm_loss = fdm_loss + self.fdm_error_coef * reg_error_loss
+
+        # TODO: Compute standard deviation and covariance of features
+        cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
+        _, std_z = self.variance_loss(z_cur.detach())
+
         if self.use_rew_pred:
             reward_pred = self.reward_decoder(z_next_pred)
             reward_loss = F.mse_loss(reward_pred, reward)
 
+        # Compute NCE to contrast positive pair and negative pairs
         queries, keys = z_next_pred, z_next
         logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
@@ -429,11 +457,13 @@ class SacFbiAgent(object):
 
         if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', nce_loss, step)
+            L.log('train_dynamic/cov_loss', cov_loss, step)
+            L.log('train_dynamic/diag_cov', diag_cov, step)
+            L.log('train_dynamic/std_z', std_z, step)
             if self.fdm_arch == 'linear':
                 L.log('train_dynamic/error_model', error_model.abs().mean(), step)
-                # L.log('train_dynamic/pred_error', fdm_loss, step)
+                L.log('train_dynamic/pred_error', fdm_loss, step)
                 # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
-                L.log('train_dynamic/pred_error', pred_loss, step)
             if self.use_rew_pred:
                 L.log('train_dynamic/reward_error', reward_loss, step)
         self.forward_model.log(L, step)
