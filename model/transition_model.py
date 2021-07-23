@@ -162,27 +162,27 @@ class DeterministicForwardModel(nn.Module):
             error_model = None
         return z_next, error_model
 
-    def curvature(self, z, u, delta=0.1, armotized=False):
+    def curvature(self, z, a, delta=0.1, armotized=False):
         z_alias = z.detach().requires_grad_(True)
-        u_alias = u.detach().requires_grad_(True)
+        a_alias = a.detach().requires_grad_(True)
         eps_z = torch.normal(mean=torch.zeros_like(z), std=torch.empty_like(z).fill_(delta))
-        eps_u = torch.normal(mean=torch.zeros_like(u), std=torch.empty_like(u).fill_(delta))
+        eps_a = torch.normal(mean=torch.zeros_like(a), std=torch.empty_like(a).fill_(delta))
 
         z_bar = z_alias + eps_z
-        u_bar = u_alias + eps_u
+        a_bar = a_alias + eps_a
 
-        z_bar_next_pred = self.forward_predictor(torch.cat((z_bar, u_bar), dim=1))
-        z_alias_next_pred = self.forward_predictor(torch.cat((z_alias, u_alias), dim=1))
+        z_bar_next_pred = self.forward_predictor(torch.cat((z_bar, a_bar), dim=1))
+        z_alias_next_pred = self.forward_predictor(torch.cat((z_alias, a_alias), dim=1))
 
-        z_dim, u_dim = z.size(1), u.size(1)
-        _, B = self.get_jacobian(self.forward_predictor, z_alias, u_alias)
+        z_dim, a_dim = z.size(1), a.size(1)
+        _, B = self.get_jacobian(self.forward_predictor, z_alias, a_alias)
         (grad_z, ) = torch.autograd.grad(z_alias_next_pred, z_alias, grad_outputs=eps_z,
                                          create_graph=True, retain_graph=True)
-        grad_u = torch.bmm(B, eps_u.view(-1, u_dim, 1)).squeeze()
+        grad_u = torch.bmm(B, eps_a.view(-1, a_dim, 1)).squeeze()
 
         taylor_error = z_bar_next_pred - (grad_z + grad_u) - z_alias_next_pred
-        cur_loss = torch.mean(torch.sum(taylor_error.pow(2), dim=1))
-        return cur_loss
+        curve_loss = torch.mean(torch.sum(taylor_error.pow(2), dim=1))
+        return curve_loss
 
     @staticmethod
     def get_jacobian(dynamics, batched_z, batched_u):
