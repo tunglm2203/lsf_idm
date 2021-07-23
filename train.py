@@ -13,6 +13,7 @@ import copy
 from tqdm import tqdm
 
 import utils
+from utils import str2bool
 from logger import Logger
 from video import VideoRecorder
 
@@ -28,10 +29,11 @@ from agent.sac_model_pred_analyse import SacModelAnalyseAgent
 def parse_args():
     parser = argparse.ArgumentParser()
     # environment
+    parser.add_argument('--benchmark', default='planet', type=str, choices=['dreamer', 'planet'])
     parser.add_argument('--domain_name', default='cheetah')
     parser.add_argument('--task_name', default='run')
     parser.add_argument('--image_size', default=84, type=int)
-    parser.add_argument('--action_repeat', default=1, type=int)
+    parser.add_argument('--action_repeat', default=-1, type=int)
     parser.add_argument('--frame_stack', default=3, type=int)
     # Distractor environment
     parser.add_argument('--difficulty', default='easy', type=str, choices=['easy', 'medium', 'hard'])
@@ -47,27 +49,29 @@ def parse_args():
     # CURL
     parser.add_argument('--cpc_update_freq', default=1, type=int)
     # CPM
-    parser.add_argument('--fdm_update_freq', default=1, type=int)
+    parser.add_argument('--enc_update_freq', default=1, type=int)
     parser.add_argument('--bdm_update_freq', default=1, type=int)
     parser.add_argument('--idm_update_freq', default=1, type=int)
     parser.add_argument('--cpm_noaug', action='store_true', default=False)
     # Linearized FDM
     parser.add_argument('--fdm_lr', default=1e-3, type=float)
-    parser.add_argument('--use_reg', action='store_true')
-    parser.add_argument('--enc_fw_e2e', action='store_true')
     parser.add_argument('--fdm_arch', default='linear', type=str)
+    parser.add_argument('--sim_metric', default='bilinear', type=str, choices=['bilinear', 'inner'])
+
     parser.add_argument('--fdm_error_coef', default=1.0, type=float)
-    parser.add_argument('--use_act_encoder', default=False, action='store_true')
-    parser.add_argument('--detach_encoder', default=False, action='store_true')
-    parser.add_argument('--detach_mlp', default=False, action='store_true')
-    parser.add_argument('--share_mlp_ac', default=False, action='store_true')
-    parser.add_argument('--use_rew_pred', default=False, action='store_true')
-    # Physical prior
-    parser.add_argument('--use_prior', default=False, action='store_true')
+    parser.add_argument('--fdm_pred_coef', default=1.0, type=float)
+    parser.add_argument('--nce_coef', default=1.0, type=float)
+
+    parser.add_argument('--enc_fw_e2e', type=str2bool, default=True)
+    parser.add_argument('--use_act_encoder', type=str2bool, default=False)
+    parser.add_argument('--detach_encoder', type=str2bool, default=False)
+    parser.add_argument('--detach_mlp', type=str2bool, default=False)
+    parser.add_argument('--share_mlp_ac', type=str2bool, default=False)
+    parser.add_argument('--use_rew_pred', type=str2bool, default=False)
     # replay buffer
     parser.add_argument('--replay_buffer_capacity', default=100000, type=int)
     # train
-    parser.add_argument('--agent', default='sac_ae', type=str)
+    parser.add_argument('--agent', default='sac_fbi', type=str)
     parser.add_argument('--init_steps', default=1000, type=int)
     parser.add_argument('--num_train_steps', default=1000000, type=int)
     parser.add_argument('--num_train_envsteps', default=-1, type=int)
@@ -338,7 +342,7 @@ def make_agent(obs_shape, action_shape, args, device):
             num_layers=args.num_layers,
             num_filters=args.num_filters,
             log_interval=args.log_interval,
-            fdm_update_freq=args.fdm_update_freq,
+            enc_update_freq=args.enc_update_freq,
             fdm_lr=args.fdm_lr,
             use_aug=not args.cpm_noaug,
             enc_fw_e2e=args.enc_fw_e2e,
@@ -389,6 +393,18 @@ def make_agent(obs_shape, action_shape, args, device):
 
 
 def make_env(args, mode='train', **kwargs):
+    ar_planet_benchmark=dict(
+        cartpole=8, cheetah=4, ball_in_cup=4, reacher=4, walker=2, finger=2,
+        hopper=4, pendulum=4
+    )
+    if args.encoder_type == 'pixel' and args.action_repeat == -1:
+        if args.benchmark == 'planet':
+            args.__dict__["action_repeat"] = ar_planet_benchmark[args.domain_name]
+        elif args.benchark == 'dreamer':
+            args.__dict__["action_repeat"] = 2
+    elif args.encoder_type == 'identity':
+        args.__dict__["action_repeat"] = 1
+
     env_args = dict(
         domain_name=args.domain_name,
         task_name=args.task_name,

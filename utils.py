@@ -4,6 +4,7 @@ import random
 import gym
 import numpy as np
 from collections import deque
+import argparse
 
 from skimage.util.shape import view_as_windows
 import torch
@@ -11,6 +12,17 @@ import kornia
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 class eval_mode(object):
     def __init__(self, *models):

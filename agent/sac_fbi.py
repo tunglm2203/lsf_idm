@@ -195,7 +195,7 @@ class SacFbiAgent(object):
             log_interval=100,
             use_aug=True,
             enc_fw_e2e=False,
-            fdm_update_freq=1, fdm_lr=1e-3,
+            enc_update_freq=1, fdm_lr=1e-3,
             fdm_arch='linear', sim_metric='bilinear',
             fdm_error_coef=1.0, fdm_pred_coef=1.0, nce_coef=1.0,
             use_act_encoder=False,
@@ -236,7 +236,7 @@ class SacFbiAgent(object):
         self.f_error_coef = fdm_error_coef
         self.f_pred_coef = fdm_pred_coef
         self.nce_coef = nce_coef
-        self.fdm_update_freq = fdm_update_freq
+        self.enc_update_freq = enc_update_freq
 
         print('[INFO] Use augmentation: ', str(self.use_aug))
         if self.use_aug:
@@ -603,7 +603,7 @@ class SacFbiAgent(object):
                 self.encoder_tau
             )
 
-        if step % self.fdm_update_freq == 0:
+        if step % self.enc_update_freq == 0:
             self.update_encoder(obs, next_obs, action, reward, L, step)
 
 
