@@ -72,7 +72,7 @@ def parse_args():
     parser.add_argument('--num_train_steps', default=1000000, type=int)
     parser.add_argument('--num_train_envsteps', default=-1, type=int)
     parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--hidden_dim', default=1024, type=int)
+    parser.add_argument('--hidden_dim', default=256, type=int)
     # eval
     parser.add_argument('--eval_freq', default=10000, type=int)
     parser.add_argument('--num_eval_episodes', default=10, type=int)
@@ -341,10 +341,12 @@ def make_agent(obs_shape, action_shape, args, device):
             fdm_update_freq=args.fdm_update_freq,
             fdm_lr=args.fdm_lr,
             use_aug=not args.cpm_noaug,
-            use_reg=args.use_reg,
             enc_fw_e2e=args.enc_fw_e2e,
             fdm_arch=args.fdm_arch,
+            sim_metric=args.sim_metric,
             fdm_error_coef=args.fdm_error_coef,
+            fdm_pred_coef=args.fdm_pred_coef,
+            nce_coef=args.nce_coef,
             use_act_encoder=args.use_act_encoder,
             detach_encoder=args.detach_encoder,
             detach_mlp=args.detach_mlp,

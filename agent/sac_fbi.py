@@ -194,11 +194,10 @@ class SacFbiAgent(object):
             encoder_lr=1e-3, encoder_tau=0.005,
             log_interval=100,
             use_aug=True,
-            use_reg=False,
             enc_fw_e2e=False,
             fdm_update_freq=1, fdm_lr=1e-3,
-            fdm_arch='linear',
-            fdm_error_coef=1.0,
+            fdm_arch='linear', sim_metric='bilinear',
+            fdm_error_coef=1.0, fdm_pred_coef=1.0, nce_coef=1.0,
             use_act_encoder=False,
             detach_encoder=False,
             detach_mlp=False,
@@ -214,18 +213,17 @@ class SacFbiAgent(object):
 
         self.log_interval = log_interval
         self.image_size = obs_shape[-1]
-        self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
         self.use_aug = use_aug
-        self.use_reg = use_reg
 
         self.use_act_encoder = use_act_encoder
+        self.detach_encoder = detach_encoder
         self.detach_mlp = detach_mlp
         self.u_dim = 50
         self.fdm_hidden_dim = 50
         self.share_mlp_ac = share_mlp_ac
         self.use_rew_pred = use_rew_pred
-        self.sim_metric = 'inner'
+        self.sim_metric = sim_metric
 
         # self.pi_arch = 'linear'
         # self.q_arch = 'linear'
@@ -235,7 +233,9 @@ class SacFbiAgent(object):
         # self.fdm_arch = 'non_linear'
         self.enc_fw_e2e = enc_fw_e2e
 
-        self.fdm_error_coef = fdm_error_coef
+        self.f_error_coef = fdm_error_coef
+        self.f_pred_coef = fdm_pred_coef
+        self.nce_coef = nce_coef
         self.fdm_update_freq = fdm_update_freq
 
         print('[INFO] Use augmentation: ', str(self.use_aug))
@@ -293,12 +293,12 @@ class SacFbiAgent(object):
         )
         self.forward_model = self.forward_model.to(self.device)
         # self.forward_model.encoder.copy_conv_weights_from(self.critic.encoder)
-        if self.use_rew_pred:
-            self.reward_decoder = nn.Sequential(
-                nn.Linear(encoder_feature_dim, self.fdm_hidden_dim),
-                nn.LayerNorm(self.fdm_hidden_dim),
-                nn.ReLU(),
-                nn.Linear(self.fdm_hidden_dim, 1)).to(device)
+        # if self.use_rew_pred:
+        #     self.reward_decoder = nn.Sequential(
+        #         nn.Linear(encoder_feature_dim, self.fdm_hidden_dim),
+        #         nn.LayerNorm(self.fdm_hidden_dim),
+        #         nn.ReLU(),
+        #         nn.Linear(self.fdm_hidden_dim, 1)).to(device)
 
         encoder_params = list(self.forward_model.encoder.parameters())
         if self.sim_metric == 'bilinear':
@@ -309,8 +309,8 @@ class SacFbiAgent(object):
             fdm_params += list(self.forward_model.act_encoder.parameters())
         if self.fdm_arch == 'linear':
             fdm_params += list(self.forward_model.error_model.parameters())
-        if self.use_rew_pred:
-            fdm_params += list(self.reward_decoder.parameters())
+        # if self.use_rew_pred:
+        #     fdm_params += list(self.reward_decoder.parameters())
 
         self.encoder_optimizer = torch.optim.Adam(encoder_params, lr=encoder_lr)
         self.forward_optimizer = torch.optim.Adam(fdm_params, lr=fdm_lr)
@@ -357,39 +357,39 @@ class SacFbiAgent(object):
             z_cur = self.forward_model.encoder(cur_obs).detach()
             z_next = self.forward_model.encoder_target(next_obs).detach()
 
-        # s' = Ws*s + Wa*a + error(s,a)
+        # TODO: Predict next state
         z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
-        pred_loss = F.mse_loss(z_next_pred, z_next)
-        if self.fdm_arch == 'linear':
-            reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
-            fdm_loss = pred_loss + self.fdm_error_coef * reg_error_loss
-        else:
-            reg_error_loss = None
-            fdm_loss = pred_loss
+        # TODO: Compute error of next state prediction
+        pred_error = F.mse_loss(z_next_pred, z_next)
+        fdm_loss = self.f_pred_coef * pred_error
+        if error_model is not None:
+            reg_error_loss = torch.mean(error_model.pow(2).sum(dim=1))
+            fdm_loss += self.f_error_coef * reg_error_loss
 
         self.forward_optimizer.zero_grad()
         fdm_loss.backward()
         self.forward_optimizer.step()
 
         if step % self.log_interval == 0:
-            L.log('train_dynamic/pred_loss', pred_loss, step)
-            if self.fdm_arch == 'linear':
-                L.log('train_dynamic/error_model', error_model.abs().mean(), step)
+            L.log('train_dynamic/pred_loss', pred_error, step)
+            if error_model is not None:
                 L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
 
         # Step 2: Freeze "act encoder & forward & error model", learn obs encoder
         z_cur = self.forward_model.encoder(cur_obs)
         z_next_pred, _ = self.forward_model(z_cur, cur_act)
 
-        # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
-        queries, keys = z_next_pred, z_next
+        # TODO: Compute standard deviation and covariance of features
+        cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
+        _, std_z = self.variance_loss(z_cur.detach())
 
+        queries, keys = z_next_pred, z_next
         logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         nce_loss = self.cross_entropy_loss(logits, labels)
 
-        loss = nce_loss
+        loss = self.nce_coef * nce_loss
 
         self.encoder_optimizer.zero_grad()
         loss.backward()
@@ -397,6 +397,9 @@ class SacFbiAgent(object):
 
         if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', nce_loss, step)
+            L.log('train_dynamic/enc_cov_loss', cov_loss, step)
+            L.log('train_dynamic/enc_diag_cov', diag_cov, step)
+            L.log('train_dynamic/enc_std_z', std_z, step)
         self.forward_model.log(L, step)
 
     def covariance_loss(self, z):
@@ -419,35 +422,82 @@ class SacFbiAgent(object):
     def update_fw_e2e(self, cur_obs, next_obs, cur_act, reward, L, step):
         # TODO: Train FDM e2e
         assert self.enc_fw_e2e
-        z_cur = self.forward_model.encoder(cur_obs)
+
         with torch.no_grad():
             z_next = self.forward_model.encoder_target(next_obs).detach()
 
         # TODO: Predict next state
+        z_cur = self.forward_model.encoder(cur_obs)
         z_next_pred, error_model = self.forward_model(z_cur, cur_act)
 
         # TODO: Compute error of next state prediction
-        fdm_loss = F.mse_loss(z_next_pred.detach(), z_next)
-        # fdm_loss = F.mse_loss(z_next_pred, z_next)
-        # reg_error_loss = 0.5 * torch.norm(error_model, p=2) ** 2
-        # fdm_loss = fdm_loss + self.fdm_error_coef * reg_error_loss
+        pred_error = F.mse_loss(z_next_pred, z_next)
+        fdm_loss = self.f_pred_coef * pred_error
+        if error_model is not None:
+            reg_error_loss = torch.mean(error_model.pow(2).sum(dim=1))
+            fdm_loss += self.f_error_coef * reg_error_loss
+
+        # if self.use_rew_pred:
+        #     reward_pred = self.reward_decoder(z_next_pred)
+        #     reward_loss = F.mse_loss(reward_pred, reward)
 
         # TODO: Compute standard deviation and covariance of features
         cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
         _, std_z = self.variance_loss(z_cur.detach())
 
-        if self.use_rew_pred:
-            reward_pred = self.reward_decoder(z_next_pred)
-            reward_loss = F.mse_loss(reward_pred, reward)
-
-        # Compute NCE to contrast positive pair and negative pairs
+        # TODO: Compute NCE to contrast positive pair and negative pairs
         queries, keys = z_next_pred, z_next
         logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         nce_loss = self.cross_entropy_loss(logits, labels)
 
-        loss = nce_loss
-        # loss = nce_loss + fdm_loss
+        loss = self.nce_coef * nce_loss + fdm_loss
+
+        self.encoder_optimizer.zero_grad()
+        self.forward_optimizer.zero_grad()
+        loss.backward()
+        self.encoder_optimizer.step()
+        self.forward_optimizer.step()
+
+        if step % self.log_interval == 0:
+            L.log('train_dynamic/contrastive_loss', nce_loss, step)
+            L.log('train_dynamic/enc_cov_loss', cov_loss, step)
+            L.log('train_dynamic/enc_diag_cov', diag_cov, step)
+            L.log('train_dynamic/enc_std_z', std_z, step)
+            # L.log('train_dynamic/variance_loss', variance_loss, step)
+            L.log('train_dynamic/pred_error', pred_error, step)
+            if error_model is not None:
+                L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
+            # if self.use_rew_pred:
+            #     L.log('train_dynamic/reward_error', reward_loss, step)
+        self.forward_model.log(L, step)
+
+    def update_fw_e2e_curvature(self, cur_obs, next_obs, cur_act, reward, L, step):
+        cur_coef = 1.0
+        assert self.enc_fw_e2e and self.fdm_arch == 'non_linear'
+        z_cur = self.forward_model.encoder(cur_obs)
+        with torch.no_grad():
+            z_next = self.forward_model.encoder_target(next_obs).detach()
+
+        # TODO: Predict next state
+        z_next_pred, _ = self.forward_model(z_cur, cur_act)
+
+        # TODO: Compute error of next state prediction
+        fdm_loss = F.mse_loss(z_next_pred.detach(), z_next)
+        # fdm_loss = F.mse_loss(z_next_pred, z_next)
+
+        # TODO: Compute standard deviation and covariance of features
+        cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
+        _, std_z = self.variance_loss(z_cur.detach())
+
+        queries, keys = z_next_pred, z_next
+        logits = self.forward_model.compute_logits(queries, keys)
+        labels = torch.arange(logits.shape[0]).long().to(self.device)
+        nce_loss = self.cross_entropy_loss(logits, labels)
+
+        curvature_loss = self.forward_model.curvature(z_cur, cur_act)
+
+        loss = nce_loss + cur_coef * curvature_loss
 
         self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
@@ -460,50 +510,8 @@ class SacFbiAgent(object):
             L.log('train_dynamic/cov_loss', cov_loss, step)
             L.log('train_dynamic/diag_cov', diag_cov, step)
             L.log('train_dynamic/std_z', std_z, step)
-            if self.fdm_arch == 'linear':
-                L.log('train_dynamic/error_model', error_model.abs().mean(), step)
-                L.log('train_dynamic/pred_error', fdm_loss, step)
-                # L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
-            if self.use_rew_pred:
-                L.log('train_dynamic/reward_error', reward_loss, step)
-        self.forward_model.log(L, step)
-
-    def update_fw_e2e_curvature(self, cur_obs, next_obs, cur_act, reward, L, step):
-        cur_coef = 1.0
-        assert self.enc_fw_e2e and self.fdm_arch == 'non_linear'
-        z_cur = self.forward_model.encoder(cur_obs)
-        a_cur = self.forward_model.act_encoder(cur_act)
-        with torch.no_grad():
-            z_next_gt = self.forward_model.encoder_target(next_obs).detach()
-
-        # s' = Ws*s + Wa*a + error(s,a)
-        z_next_pred = self.forward_model.forward_predictor(torch.cat((z_cur, a_cur), dim=1))
-        # if self.fdm_arch == 'linear':
-        #     error_model = self.forward_model.error_model(torch.cat((z_cur, a_cur), dim=1))
-        #     z_next_pred = z_next_pred + error_model
-        # else:
-        #     error_model = None
-
-        queries, keys = z_next_pred, z_next_gt
-        logits = self.forward_model.compute_logits(queries, keys)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        contrastive_loss = self.cross_entropy_loss(logits, labels)
-
-        cur_loss = self.forward_model.curvature(z_cur, a_cur)
-
-        loss = contrastive_loss + cur_coef * cur_loss
-
-        self.encoder_optimizer.zero_grad()
-        self.forward_optimizer.zero_grad()
-        loss.backward()
-        self.encoder_optimizer.step()
-        self.forward_optimizer.step()
-
-        if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', contrastive_loss, step)
-            L.log('train_dynamic/cur_loss', cur_loss, step)
-            # if self.fdm_arch == 'linear':
-            #     L.log('train_dynamic/error_model', error_model.abs().mean(), step)
+            L.log('train_dynamic/curve_loss', curvature_loss, step)
+            L.log('train_dynamic/pred_error', fdm_loss, step)
         self.forward_model.log(L, step)
 
     def update_encoder(self, obs, next_obs, action, reward, L, step):
