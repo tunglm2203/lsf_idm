@@ -17,8 +17,7 @@ class Actor(nn.Module):
 
     def __init__(
             self, obs_shape, action_shape, hidden_dim, encoder_type,
-            encoder_feature_dim, log_std_min, log_std_max, num_layers, num_filters,
-            arch
+            encoder_feature_dim, log_std_min, log_std_max, num_layers, num_filters
     ):
         super().__init__()
 
@@ -30,19 +29,11 @@ class Actor(nn.Module):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 
-        print ('[INFO] Actor architecture: ', arch)
-        if arch == 'non_linear':
-            self.trunk = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim, hidden_dim), nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-                nn.Linear(hidden_dim, 2 * action_shape[0])
-            )
-        elif arch == 'linear':
-            self.trunk = nn.Sequential(
-                nn.Linear(self.encoder.feature_dim, 2 * action_shape[0])
-            )
-        else:
-            assert 'Architecture not support: ', arch
+        self.trunk = nn.Sequential(
+            nn.Linear(self.encoder.feature_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, 2 * action_shape[0])
+        )
 
         self.outputs = dict()
         self.apply(weight_init)
@@ -98,21 +89,14 @@ class Actor(nn.Module):
 class QFunction(nn.Module):
     """MLP for q-function."""
 
-    def __init__(self, obs_dim, action_dim, hidden_dim, arch):
+    def __init__(self, obs_dim, action_dim, hidden_dim):
         super().__init__()
 
-        if arch == 'non_linear':
-            self.trunk = nn.Sequential(
-                nn.Linear(obs_dim + action_dim, hidden_dim), nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
-                nn.Linear(hidden_dim, 1)
-            )
-        elif arch == 'linear':
-            self.trunk = nn.Sequential(
-                nn.Linear(obs_dim + action_dim, 1)
-            )
-        else:
-            assert 'Architecture not support: ', arch
+        self.trunk = nn.Sequential(
+            nn.Linear(obs_dim + action_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim), nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
 
     def forward(self, obs, action):
         assert obs.size(0) == action.size(0)
@@ -126,7 +110,7 @@ class Critic(nn.Module):
 
     def __init__(
             self, obs_shape, action_shape, hidden_dim, encoder_type,
-            encoder_feature_dim, num_layers, num_filters, arch
+            encoder_feature_dim, num_layers, num_filters
     ):
         super().__init__()
 
@@ -135,12 +119,11 @@ class Critic(nn.Module):
             num_filters, output_logits=True
         )
 
-        print('[INFO] Critic architecture: ', arch)
         self.Q1 = QFunction(
-            self.encoder.feature_dim, action_shape[0], hidden_dim, arch
+            self.encoder.feature_dim, action_shape[0], hidden_dim
         )
         self.Q2 = QFunction(
-            self.encoder.feature_dim, action_shape[0], hidden_dim, arch
+            self.encoder.feature_dim, action_shape[0], hidden_dim
         )
 
         self.outputs = dict()
@@ -198,6 +181,7 @@ class SacFbiAgent(object):
             enc_update_freq=1, fdm_lr=1e-3,
             fdm_arch='linear', sim_metric='bilinear',
             fdm_error_coef=1.0, fdm_pred_coef=1.0, nce_coef=1.0,
+            cov_loss_coef=1.0, var_loss_coef=1.0,
             use_act_encoder=False,
             detach_encoder=False,
             detach_mlp=False,
@@ -225,17 +209,14 @@ class SacFbiAgent(object):
         self.use_rew_pred = use_rew_pred
         self.sim_metric = sim_metric
 
-        # self.pi_arch = 'linear'
-        # self.q_arch = 'linear'
         self.fdm_arch = fdm_arch
-        self.pi_arch = 'non_linear'
-        self.q_arch = 'non_linear'
-        # self.fdm_arch = 'non_linear'
         self.enc_fw_e2e = enc_fw_e2e
 
         self.f_error_coef = fdm_error_coef
         self.f_pred_coef = fdm_pred_coef
         self.nce_coef = nce_coef
+        self.cov_loss_coef = cov_loss_coef
+        self.var_loss_coef = var_loss_coef
         self.enc_update_freq = enc_update_freq
 
         print('[INFO] Use augmentation: ', str(self.use_aug))
@@ -247,17 +228,17 @@ class SacFbiAgent(object):
         self.actor = Actor(
             obs_shape, action_shape, hidden_dim, encoder_type,
             encoder_feature_dim, actor_log_std_min, actor_log_std_max,
-            num_layers, num_filters, self.pi_arch
+            num_layers, num_filters
         ).to(device)
 
         self.critic = Critic(
             obs_shape, action_shape, hidden_dim, encoder_type,
-            encoder_feature_dim, num_layers, num_filters, self.q_arch
+            encoder_feature_dim, num_layers, num_filters
         ).to(device)
 
         self.critic_target = Critic(
             obs_shape, action_shape, hidden_dim, encoder_type,
-            encoder_feature_dim, num_layers, num_filters, self.q_arch
+            encoder_feature_dim, num_layers, num_filters
         ).to(device)
 
         self.critic_target.load_state_dict(self.critic.state_dict())
@@ -292,7 +273,8 @@ class SacFbiAgent(object):
             self.critic, self.critic_target, self.fdm_arch, use_act_encoder, self.sim_metric
         )
         self.forward_model = self.forward_model.to(self.device)
-        # self.forward_model.encoder.copy_conv_weights_from(self.critic.encoder)
+        self.forward_model.encoder.copy_conv_weights_from(self.critic.encoder)
+
         # if self.use_rew_pred:
         #     self.reward_decoder = nn.Sequential(
         #         nn.Linear(encoder_feature_dim, self.fdm_hidden_dim),
@@ -309,6 +291,7 @@ class SacFbiAgent(object):
             fdm_params += list(self.forward_model.act_encoder.parameters())
         if self.fdm_arch == 'linear':
             fdm_params += list(self.forward_model.error_model.parameters())
+
         # if self.use_rew_pred:
         #     fdm_params += list(self.reward_decoder.parameters())
 
@@ -443,7 +426,7 @@ class SacFbiAgent(object):
 
         # TODO: Compute standard deviation and covariance of features
         cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
-        _, std_z = self.variance_loss(z_cur.detach())
+        variance_loss, std_z = self.variance_loss(z_cur.detach())
 
         # TODO: Compute NCE to contrast positive pair and negative pairs
         queries, keys = z_next_pred, z_next
@@ -452,6 +435,7 @@ class SacFbiAgent(object):
         nce_loss = self.cross_entropy_loss(logits, labels)
 
         loss = self.nce_coef * nce_loss + fdm_loss
+        # loss = fdm_loss + self.cov_loss_coef * cov_loss + self.var_loss_coef * variance_loss
 
         self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
@@ -464,7 +448,7 @@ class SacFbiAgent(object):
             L.log('train_dynamic/enc_cov_loss', cov_loss, step)
             L.log('train_dynamic/enc_diag_cov', diag_cov, step)
             L.log('train_dynamic/enc_std_z', std_z, step)
-            # L.log('train_dynamic/variance_loss', variance_loss, step)
+            L.log('train_dynamic/variance_loss', variance_loss, step)
             L.log('train_dynamic/pred_error', pred_error, step)
             if error_model is not None:
                 L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
