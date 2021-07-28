@@ -178,7 +178,7 @@ class SacFbiAgent(object):
             log_interval=100,
             use_aug=True,
             enc_update_freq=1, fdm_lr=1e-3,
-            fdm_arch='linear', sim_metric='bilinear',
+            fdm_arch='linear', sim_metric='bilinear', error_weight=1.0,
             fdm_error_coef=1.0, fdm_pred_coef=1.0, nce_coef=1.0,
             cov_loss_coef=1.0, var_loss_coef=1.0,
             use_act_encoder=False,
@@ -266,7 +266,8 @@ class SacFbiAgent(object):
         fdm_type = 'deterministic'
         self.forward_model = make_transition_model(fdm_type,
             obs_shape, action_shape, encoder_feature_dim, self.u_dim, self.fdm_hidden_dim,
-            self.critic, self.critic_target, self.fdm_arch, use_act_encoder, self.sim_metric
+            self.critic, self.critic_target, self.fdm_arch, use_act_encoder, self.sim_metric,
+            error_weight
         )
         self.forward_model = self.forward_model.to(self.device)
         self.forward_model.encoder.copy_conv_weights_from(self.critic.encoder)
@@ -336,8 +337,6 @@ class SacFbiAgent(object):
         return std_loss, torch.mean(z.detach().std(dim=0))
 
     def update_enc_by_aux(self, cur_obs, next_obs, cur_act, reward, L, step):
-        # TODO: Train FDM e2e
-
         with torch.no_grad():
             z_next = self.forward_model.encoder_target(next_obs).detach()
 
@@ -498,6 +497,9 @@ class SacFbiAgent(object):
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)
 
+        if step % self.enc_update_freq == 0:
+            self.update_encoder(obs, next_obs, action, reward, L, step)
+
         if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(
                 self.critic.Q1, self.critic_target.Q1, self.critic_tau
@@ -509,9 +511,6 @@ class SacFbiAgent(object):
                 self.critic.encoder, self.critic_target.encoder,
                 self.encoder_tau
             )
-
-        if step % self.enc_update_freq == 0:
-            self.update_encoder(obs, next_obs, action, reward, L, step)
 
 
     def save(self, model_dir, step):

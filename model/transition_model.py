@@ -99,7 +99,7 @@ class DeterministicForwardModel(nn.Module):
 
     def __init__(self, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
                  critic, critic_target,
-                 arch, use_act_encoder=True, sim_metric='inner'):
+                 arch, use_act_encoder=True, sim_metric='inner', error_weight=1.0):
         super(DeterministicForwardModel, self).__init__()
 
         assert sim_metric in ['inner', 'bilinear']
@@ -108,6 +108,7 @@ class DeterministicForwardModel(nn.Module):
         self.encoder_target = critic_target.encoder
         self.hidden_dim = hidden_dim
         self.arch = arch
+        self.error_weight = error_weight
 
         if use_act_encoder:
             self.act_emb_dim = u_dim
@@ -155,7 +156,7 @@ class DeterministicForwardModel(nn.Module):
         z_u_concat = torch.cat((z, u), dim=1)
         z_next = self.forward_predictor(z_u_concat)
         if self.arch == 'linear':
-            error_model = self.error_model(z_u_concat)
+            error_model = self.error_weight * self.error_model(z_u_concat)
             z_next = z_next + error_model
         else:
             z_next = z_next
@@ -256,9 +257,10 @@ _AVAILABLE_TRANSITION_MODELS = {'': DeterministicForwardModel,
 
 
 def make_transition_model(fdm_type, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
-                          critic, critic_target, arch, use_act_encoder=True, sim_metric='bilinear'):
+                          critic, critic_target, arch, use_act_encoder=True, sim_metric='bilinear',
+                          error_weight=1.0):
     assert fdm_type in _AVAILABLE_TRANSITION_MODELS
     return _AVAILABLE_TRANSITION_MODELS[fdm_type](
         obs_shape, action_shape, z_dim, u_dim, hidden_dim,
-        critic, critic_target, arch, use_act_encoder, sim_metric
+        critic, critic_target, arch, use_act_encoder, sim_metric, error_weight
     )
