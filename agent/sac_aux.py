@@ -159,7 +159,7 @@ class Critic(nn.Module):
                 cnt += 1
 
 
-class SacFbiAgent(object):
+class SacAuxAgent(object):
     """CURL representation learning with SAC."""
 
     def __init__(
@@ -381,51 +381,8 @@ class SacFbiAgent(object):
                 L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
         self.forward_model.log(L, step)
 
-    def update_enc_by_aux_curvature(self, cur_obs, next_obs, cur_act, reward, L, step):
-        cur_coef = 1.0
-        assert self.fdm_arch == 'non_linear'
-        z_cur = self.forward_model.encoder(cur_obs)
-        with torch.no_grad():
-            z_next = self.forward_model.encoder_target(next_obs).detach()
-
-        # TODO: Predict next state
-        z_next_pred, _ = self.forward_model(z_cur, cur_act)
-
-        # TODO: Compute error of next state prediction
-        fdm_loss = F.mse_loss(z_next_pred.detach(), z_next)
-        # fdm_loss = F.mse_loss(z_next_pred, z_next)
-
-        # TODO: Compute standard deviation and covariance of features
-        cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
-        _, std_z = self.variance_loss(z_cur.detach())
-
-        queries, keys = z_next_pred, z_next
-        logits = self.forward_model.compute_logits(queries, keys)
-        labels = torch.arange(logits.shape[0]).long().to(self.device)
-        nce_loss = self.cross_entropy_loss(logits, labels)
-
-        curvature_loss = self.forward_model.curvature(z_cur, cur_act)
-
-        loss = nce_loss + cur_coef * curvature_loss
-
-        self.encoder_optimizer.zero_grad()
-        self.forward_optimizer.zero_grad()
-        loss.backward()
-        self.encoder_optimizer.step()
-        self.forward_optimizer.step()
-
-        if step % self.log_interval == 0:
-            L.log('train_dynamic/contrastive_loss', nce_loss, step)
-            L.log('train_dynamic/cov_loss', cov_loss, step)
-            L.log('train_dynamic/diag_cov', diag_cov, step)
-            L.log('train_dynamic/std_z', std_z, step)
-            L.log('train_dynamic/curve_loss', curvature_loss, step)
-            L.log('train_dynamic/pred_error', fdm_loss, step)
-        self.forward_model.log(L, step)
-
     def update_encoder(self, obs, next_obs, action, reward, L, step):
         self.update_enc_by_aux(obs, next_obs, action, reward, L, step)
-        # self.update_enc_by_aux_curvature(obs, next_obs, action, reward, L, step)
 
     def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
         with torch.no_grad():
