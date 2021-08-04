@@ -362,6 +362,125 @@ class ReplayBuffer(object):
             self.idx = end
 
 
+class LSFReplayBuffer(object):
+    """Buffer to store environment transitions."""
+    def __init__(self, obs_shape, action_shape, capacity, batch_size, device,
+                 action_repeat):
+        self.capacity = capacity
+        self.batch_size = batch_size
+        self.device = device
+
+        # the proprioceptive obs is stored as float32, pixels obs as uint8
+        obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
+
+        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
+        self.rewards = np.empty((capacity, 1), dtype=np.float32)
+        self.not_dones = np.empty((capacity, 1), dtype=np.float32)
+        self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
+
+        self.idx = 0
+        self.full = False
+        self.last_save = 0
+
+        # Scope for skipped frames buffer
+        self.sf_capacity = capacity
+        self.ar = action_repeat
+
+        self.sf_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
+        self.sf_next_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
+
+        self.sf_idx = 0
+        self.sf_full = False
+
+    def imshow(self, obs):
+        import matplotlib.pyplot as plt
+        if obs.shape[2] == 9:
+            plt.subplot(131)
+            plt.imshow(obs[:, :, :3])
+            plt.subplot(132)
+            plt.imshow(obs[:, :, 3:6])
+            plt.subplot(133)
+            plt.imshow(obs[:, :, 6:])
+
+        else:
+            plt.imshow(obs)
+        plt.axis('off')
+        plt.tight_layout()
+        plt.show()
+
+    def add(self, obs, action, reward, next_obs, done, done_no_max, extra, next_extra, first_step):
+        np.copyto(self.obses[self.idx], obs)
+        np.copyto(self.actions[self.idx], action)
+        np.copyto(self.rewards[self.idx], reward)
+        np.copyto(self.next_obses[self.idx], next_obs)
+        np.copyto(self.not_dones[self.idx], not done)
+        np.copyto(self.not_dones_no_max[self.idx], not done_no_max)
+
+        if not first_step:
+            for offset_sf in range(self.ar - 1):
+                np.copyto(self.sf_obses[self.sf_idx], extra['skipped_obses'][offset_sf])
+                np.copyto(self.sf_next_obses[self.sf_idx], next_extra['skipped_obses'][offset_sf])
+
+                self.sf_idx = (self.sf_idx + 1) % self.sf_capacity
+                self.sf_full = self.sf_full or self.sf_idx == 0
+
+        self.idx = (self.idx + 1) % self.capacity
+        self.full = self.full or self.idx == 0
+
+    def sample(self):
+        idxs = np.random.randint(
+            0, self.capacity if self.full else self.idx, size=self.batch_size
+        )
+
+        sf_idxs = np.random.randint(
+            0, self.sf_capacity if self.sf_full else self.sf_idx, size=self.batch_size
+        )
+
+        obses = torch.as_tensor(self.obses[idxs], device=self.device).float()
+        actions = torch.as_tensor(self.actions[idxs], device=self.device)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
+        next_obses = torch.as_tensor(self.next_obses[idxs], device=self.device).float()
+        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
+
+        sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
+        sf_next_obses = torch.as_tensor(self.sf_next_obses[sf_idxs], device=self.device).float
+        extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses)
+
+        return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, extra
+
+    def save(self, save_dir):
+        if self.idx == self.last_save:
+            return
+        path = os.path.join(save_dir, '%d_%d.pt' % (self.last_save, self.idx))
+        payload = [
+            self.obses[self.last_save:self.idx],
+            self.next_obses[self.last_save:self.idx],
+            self.actions[self.last_save:self.idx],
+            self.rewards[self.last_save:self.idx],
+            self.not_dones[self.last_save:self.idx]
+        ]
+        self.last_save = self.idx
+        torch.save(payload, path)
+
+    def load(self, save_dir):
+        chunks = os.listdir(save_dir)
+        chucks = sorted(chunks, key=lambda x: int(x.split('_')[0]))
+        for chunk in chucks:
+            start, end = [int(x) for x in chunk.split('.')[0].split('_')]
+            path = os.path.join(save_dir, chunk)
+            payload = torch.load(path)
+            assert self.idx == start
+            self.obses[start:end] = payload[0]
+            self.next_obses[start:end] = payload[1]
+            self.actions[start:end] = payload[2]
+            self.rewards[start:end] = payload[3]
+            self.not_dones[start:end] = payload[4]
+            self.idx = end
+
+
 class RadReplayBuffer(Dataset):
     """Buffer to store environment transitions."""
 
@@ -570,7 +689,7 @@ class DrQReplayBuffer(object):
         return obses, actions, rewards, next_obses, not_dones_no_max, obses_aug, next_obses_aug
 
 class FrameStack(gym.Wrapper):
-    def __init__(self, env, k):
+    def __init__(self, env, k, ar=1):
         gym.Wrapper.__init__(self, env)
         self._k = k
         self._frames = deque([], maxlen=k)
@@ -583,7 +702,12 @@ class FrameStack(gym.Wrapper):
         )
         self._max_episode_steps = env._max_episode_steps
 
+        self.ar = ar
+        self._extras = [deque([], maxlen=k) for _ in range(ar - 1)]
+        self.cur_step = 0
+
     def reset(self):
+        self.cur_step = 0
         obs = self.env.reset()
         for _ in range(self._k):
             self._frames.append(obs)
@@ -592,6 +716,27 @@ class FrameStack(gym.Wrapper):
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
         self._frames.append(obs)
+
+        skipped_obses = []
+        if self.cur_step == 0:
+            # Init first step contains _k same frames
+            for offset_sf in range(self.ar - 1):
+                for _ in range(self._k):
+                    self._extras[offset_sf].append(info['skipped_obses'][offset_sf])
+                stacked_skipped_frames = np.concatenate(list(self._extras[offset_sf]), axis=0)
+                skipped_obses.append(stacked_skipped_frames)
+        else:
+            for offset_sf in range(self.ar - 1):
+                self._extras[offset_sf].append(info['skipped_obses'][offset_sf])
+                stacked_skipped_frames = np.concatenate(list(self._extras[offset_sf]), axis=0)
+                skipped_obses.append(stacked_skipped_frames)
+
+        assert len(skipped_obses) == self.ar - 1
+        assert skipped_obses[0].shape == self.observation_space.shape
+
+        # Replacing info['skipped_obses'] with stacked skipped frames
+        info['skipped_obses'] = skipped_obses
+        self.cur_step += 1
         return self._get_obs(), reward, done, info
 
     def _get_obs(self):

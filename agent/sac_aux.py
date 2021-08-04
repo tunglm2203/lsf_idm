@@ -177,10 +177,9 @@ class SacAuxAgent(object):
             encoder_lr=1e-3, encoder_tau=0.005,
             log_interval=100,
             use_aug=True,
-            enc_update_freq=1, fdm_lr=1e-3,
+            n_enc_updates=1, fdm_lr=1e-3,
             fdm_arch='linear', sim_metric='bilinear', error_weight=1.0,
-            fdm_error_coef=1.0, fdm_pred_coef=1.0, nce_coef=1.0,
-            cov_loss_coef=1.0, var_loss_coef=1.0,
+            fdm_error_coef=1.0, fdm_pred_coef=1.0,
             use_act_encoder=False,
             detach_encoder=False,
             detach_mlp=False,
@@ -210,10 +209,7 @@ class SacAuxAgent(object):
 
         self.f_error_coef = fdm_error_coef
         self.f_pred_coef = fdm_pred_coef
-        self.nce_coef = nce_coef
-        self.cov_loss_coef = cov_loss_coef
-        self.var_loss_coef = var_loss_coef
-        self.enc_update_freq = enc_update_freq
+        self.n_enc_updates = n_enc_updates
 
         print('[INFO] Use augmentation: ', str(self.use_aug))
         if self.use_aug:
@@ -336,7 +332,7 @@ class SacAuxAgent(object):
         std_loss = torch.mean(F.relu(1 - std_z))
         return std_loss, torch.mean(z.detach().std(dim=0))
 
-    def update_enc_by_aux(self, cur_obs, next_obs, cur_act, reward, L, step):
+    def update_encoder(self, cur_obs, next_obs, cur_act, reward, L, step):
         with torch.no_grad():
             z_next = self.forward_model.encoder_target(next_obs).detach()
 
@@ -362,7 +358,6 @@ class SacAuxAgent(object):
         nce_loss = self.cross_entropy_loss(logits, labels)
 
         loss = self.nce_coef * nce_loss + fdm_loss
-        # loss = fdm_loss + self.cov_loss_coef * cov_loss + self.var_loss_coef * variance_loss
 
         self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
@@ -380,9 +375,6 @@ class SacAuxAgent(object):
             if error_model is not None:
                 L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
         self.forward_model.log(L, step)
-
-    def update_encoder(self, obs, next_obs, action, reward, L, step):
-        self.update_enc_by_aux(obs, next_obs, action, reward, L, step)
 
     def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
         with torch.no_grad():
@@ -441,7 +433,7 @@ class SacAuxAgent(object):
         self.log_alpha_optimizer.step()
 
     def update(self, replay_buffer, L, step):
-        obs, action, reward, next_obs, _, not_done = replay_buffer.sample()
+        obs, action, reward, next_obs, _, not_done, extra = replay_buffer.sample()
 
         obs = self.aug_trans(obs)
         next_obs = self.aug_trans(next_obs)
@@ -454,7 +446,7 @@ class SacAuxAgent(object):
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)
 
-        if step % self.enc_update_freq == 0:
+        for i in range(self.n_enc_updates):
             self.update_encoder(obs, next_obs, action, reward, L, step)
 
         if step % self.critic_target_update_freq == 0:
