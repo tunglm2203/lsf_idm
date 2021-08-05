@@ -116,7 +116,7 @@ def parse_args():
     parser.add_argument('--save_buffer', default=False, action='store_true')
     parser.add_argument('--save_video', default=False, action='store_true')
 
-    parser.add_argument('--log_interval', default=100, type=int)
+    parser.add_argument('--log_interval', default=500, type=int)
     args = parser.parse_args()
     return args
 

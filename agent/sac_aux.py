@@ -259,7 +259,7 @@ class SacAuxAgent(object):
         )
 
         # Forward model scope
-        fdm_type = 'deterministic'
+        fdm_type = 'marginal_deterministic'
         self.forward_model = make_transition_model(fdm_type,
             obs_shape, action_shape, encoder_feature_dim, self.u_dim, self.fdm_hidden_dim,
             self.critic, self.critic_target, self.fdm_arch, use_act_encoder, self.sim_metric,
@@ -272,11 +272,10 @@ class SacAuxAgent(object):
         if self.sim_metric == 'bilinear':
             encoder_params += [self.forward_model.W]
 
-        fdm_params = list(self.forward_model.forward_predictor.parameters())
-        if use_act_encoder:
-            fdm_params += list(self.forward_model.act_encoder.parameters())
-        if self.fdm_arch == 'linear':
-            fdm_params += list(self.forward_model.error_model.parameters())
+        # TODO: simplify fdm_params
+        fdm_params = list(self.forward_model.fc1.parameters()) + \
+                     list(self.forward_model.ln1.parameters()) + \
+                     list(self.forward_model.fc_mu.parameters())
 
         self.encoder_optimizer = torch.optim.Adam(encoder_params, lr=encoder_lr)
         self.forward_optimizer = torch.optim.Adam(fdm_params, lr=fdm_lr)
@@ -315,49 +314,25 @@ class SacAuxAgent(object):
             mu, pi, _, _ = self.actor(obs, compute_log_pi=False)
             return pi.cpu().data.numpy().flatten()
 
-    def covariance_loss(self, z):
-        N, D = z.shape
-
-        z = z - z.mean(dim=0)
-        cov_z = z.T.matmul(z) / (N - 1)
-
-        diag = torch.eye(D, device=z.device)
-        cov_loss = cov_z[~diag.bool()].pow_(2).sum() / D
-        diag_cov = cov_z[diag.bool()].detach().sum() / D
-        return cov_loss, diag_cov
-
-    def variance_loss(self, z):
-        eps = 1e-4
-        std_z = torch.sqrt(z.var(dim=0) + eps)
-        std_loss = torch.mean(F.relu(1 - std_z))
-        return std_loss, torch.mean(z.detach().std(dim=0))
-
     def update_encoder(self, cur_obs, next_obs, cur_act, reward, L, step):
         with torch.no_grad():
             z_next = self.forward_model.encoder_target(next_obs).detach()
 
         # TODO: Predict next state
         z_cur = self.forward_model.encoder(cur_obs)
-        z_next_pred, error_model = self.forward_model(z_cur, cur_act)
+        z_next_pred_mu, _ = self.forward_model(z_cur)
 
-        # TODO: Compute error of next state prediction
-        pred_error = F.mse_loss(z_next_pred, z_next)
-        fdm_loss = self.f_pred_coef * pred_error
-        if error_model is not None:
-            reg_error_loss = torch.mean(error_model.pow(2).sum(dim=1))
-            fdm_loss += self.f_error_coef * reg_error_loss
-
-        # TODO: Compute standard deviation and covariance of features
-        cov_loss, diag_cov = self.covariance_loss(z_cur.detach())
-        variance_loss, std_z = self.variance_loss(z_cur.detach())
+        # # TODO: Compute error of next state prediction
+        # pred_error = F.mse_loss(z_next_pred_mu, z_next)
+        # fdm_loss = self.f_pred_coef * pred_error
 
         # TODO: Compute NCE to contrast positive pair and negative pairs
-        queries, keys = z_next_pred, z_next
+        queries, keys = z_next_pred_mu, z_next
         logits = self.forward_model.compute_logits(queries, keys)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         nce_loss = self.cross_entropy_loss(logits, labels)
 
-        loss = self.nce_coef * nce_loss + fdm_loss
+        loss = nce_loss
 
         self.encoder_optimizer.zero_grad()
         self.forward_optimizer.zero_grad()
@@ -367,13 +342,7 @@ class SacAuxAgent(object):
 
         if step % self.log_interval == 0:
             L.log('train_dynamic/contrastive_loss', nce_loss, step)
-            L.log('train_dynamic/enc_cov_loss', cov_loss, step)
-            L.log('train_dynamic/enc_diag_cov', diag_cov, step)
-            L.log('train_dynamic/enc_std_z', std_z, step)
-            L.log('train_dynamic/variance_loss', variance_loss, step)
-            L.log('train_dynamic/pred_error', pred_error, step)
-            if error_model is not None:
-                L.log('train_dynamic/reg_error_loss', reg_error_loss, step)
+            # L.log('train_dynamic/pred_error', pred_error, step)
         self.forward_model.log(L, step)
 
     def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
@@ -441,13 +410,25 @@ class SacAuxAgent(object):
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
+        for i in range(self.n_enc_updates):
+            # obs, action, reward, next_obs, _, not_done, extra = replay_buffer.sample()
+            #
+            # obs = self.aug_trans(obs)
+            # next_obs = self.aug_trans(next_obs)
+            # self.update_encoder(obs, next_obs, None, None, L, step)
+            if i == 0:
+                self.update_encoder(obs, next_obs, None, None, L, step)
+            else:
+                _, _, _, _, _, _, extra = replay_buffer.sample()
+                sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+                sf_obses = self.aug_trans(sf_obses)
+                sf_next_obses = self.aug_trans(sf_next_obses)
+                self.update_encoder(sf_obses, sf_next_obses, None, None, L, step)
+
         self.update_critic(obs, action, reward, next_obs, not_done, L, step)
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)
-
-        for i in range(self.n_enc_updates):
-            self.update_encoder(obs, next_obs, action, reward, L, step)
 
         if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(

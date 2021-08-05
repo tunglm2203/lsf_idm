@@ -394,22 +394,6 @@ class LSFReplayBuffer(object):
         self.sf_idx = 0
         self.sf_full = False
 
-    def imshow(self, obs):
-        import matplotlib.pyplot as plt
-        if obs.shape[2] == 9:
-            plt.subplot(131)
-            plt.imshow(obs[:, :, :3])
-            plt.subplot(132)
-            plt.imshow(obs[:, :, 3:6])
-            plt.subplot(133)
-            plt.imshow(obs[:, :, 6:])
-
-        else:
-            plt.imshow(obs)
-        plt.axis('off')
-        plt.tight_layout()
-        plt.show()
-
     def add(self, obs, action, reward, next_obs, done, done_no_max, extra, next_extra, first_step):
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
@@ -429,13 +413,25 @@ class LSFReplayBuffer(object):
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
-    def sample(self):
-        idxs = np.random.randint(
-            0, self.capacity if self.full else self.idx, size=self.batch_size
-        )
+    def sample(self, only_extra=False):
+        obses, actions, rewards, next_obses = None, None, None, None
+        not_dones, not_dones_no_max = None, None
 
+        # Sampling from auxiliary buffer
         sf_idxs = np.random.randint(
             0, self.sf_capacity if self.sf_full else self.sf_idx, size=self.batch_size
+        )
+
+        sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
+        sf_next_obses = torch.as_tensor(self.sf_next_obses[sf_idxs], device=self.device).float()
+        extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses)
+
+        if only_extra:
+            return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, extra
+
+        # Sampling from main buffer
+        idxs = np.random.randint(
+            0, self.capacity if self.full else self.idx, size=self.batch_size
         )
 
         obses = torch.as_tensor(self.obses[idxs], device=self.device).float()
@@ -444,10 +440,6 @@ class LSFReplayBuffer(object):
         next_obses = torch.as_tensor(self.next_obses[idxs], device=self.device).float()
         not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
         not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
-
-        sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
-        sf_next_obses = torch.as_tensor(self.sf_next_obses[sf_idxs], device=self.device).float
-        extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses)
 
         return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, extra
 

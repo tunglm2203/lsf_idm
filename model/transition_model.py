@@ -249,10 +249,78 @@ class DeterministicForwardModel(nn.Module):
                     cnt += 1
 
 
+class MarginalDeterministicForwardModel(nn.Module):
+    """
+    CURL
+    """
+
+    def __init__(self, obs_shape, action_shape, z_dim, u_dim, hidden_dim,
+                 critic, critic_target,
+                 arch, use_act_encoder=True, sim_metric='bilinear', error_weight=1.0):
+        super(MarginalDeterministicForwardModel, self).__init__()
+
+        assert sim_metric in ['inner', 'bilinear']
+        self.sim_metric = sim_metric
+        self.encoder = critic.encoder
+        self.encoder_target = critic_target.encoder
+        self.hidden_dim = hidden_dim
+
+        self.fc1 = nn.Linear(z_dim, self.hidden_dim)
+        self.ln1 = nn.LayerNorm(self.hidden_dim)
+        self.fc_mu = nn.Linear(self.hidden_dim, z_dim)
+
+
+        if self.sim_metric == 'bilinear':
+            self.W = nn.Parameter(torch.rand(z_dim, z_dim))
+        else:
+            self.W = None
+        # self.act_encoder.apply(weight_init)
+        # self.forward_predictor.apply(weight_init)
+        self.outputs = dict()
+
+    def forward(self, z):
+        z = self.fc1(z)
+        z = self.ln1(z)
+        z = torch.relu(z)
+
+        mu = self.fc_mu(z)
+        sigma = None
+        return mu, sigma
+
+    def compute_logits(self, k, q):
+        """
+        Uses logits trick for CURL:
+        - compute (B,B) matrix z_a (W z_pos.T)
+        - positives are all diagonal elements
+        - negatives are all other elements
+        - to compute loss use multiclass cross entropy with identity matrix for labels
+        """
+        if self.sim_metric == 'bilinear':
+            Wz = torch.matmul(self.W, q.T)  # (z_dim,B)
+            logits = torch.matmul(k, Wz)  # (B,B)
+        elif self.sim_metric == 'inner':
+            logits = torch.matmul(k, q.T)
+        else:
+            logits = None
+
+        logits = logits - torch.max(logits, 1)[0][:, None]  # subtract max from logits for stability
+        return logits
+
+    def log(self, L, step, log_freq=LOG_FREQ):
+        if step % log_freq != 0:
+            return
+
+        self.encoder.log(L, step, log_freq)
+
+        for k, v in self.outputs.items():
+            L.log_histogram('train_forward_model/%s_hist' % k, v, step)
+
+
 _AVAILABLE_TRANSITION_MODELS = {'': DeterministicForwardModel,
                                 'deterministic': DeterministicForwardModel,
                                 'probabilistic': None,
                                 'ensemble': None,
+                                'marginal_deterministic': MarginalDeterministicForwardModel
                                 }
 
 
