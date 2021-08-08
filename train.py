@@ -23,7 +23,7 @@ from agent.sac_rad import SacRadAgent
 from agent.sac_cpm import SacCPMAgent
 from agent.sac_drq import SacDrqAgent
 from agent.sac_aux import SacAuxAgent
-
+from agent.sac_drq_lsf import SacLSFAgent
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -351,6 +351,34 @@ def make_agent(obs_shape, action_shape, args, device):
             detach_mlp=args.detach_mlp,
             share_mlp_ac=args.share_mlp_ac,
         )
+    elif args.agent in ['sac_lsf']:
+        return SacLSFAgent(
+            obs_shape=obs_shape,
+            action_shape=action_shape,
+            device=device,
+            hidden_dim=args.hidden_dim,
+            discount=args.discount,
+            init_temperature=args.init_temperature,
+            alpha_lr=args.alpha_lr,
+            alpha_beta=args.alpha_beta,
+            actor_lr=args.actor_lr,
+            actor_beta=args.actor_beta,
+            actor_log_std_min=args.actor_log_std_min,
+            actor_log_std_max=args.actor_log_std_max,
+            actor_update_freq=args.actor_update_freq,
+            critic_lr=args.critic_lr,
+            critic_beta=args.critic_beta,
+            critic_tau=args.critic_tau,
+            critic_target_update_freq=args.critic_target_update_freq,
+            encoder_type=args.encoder_type,
+            encoder_feature_dim=args.encoder_feature_dim,
+            encoder_lr=args.encoder_lr,
+            encoder_tau=args.encoder_tau,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters,
+            log_interval=args.log_interval,
+            detach_encoder=args.detach_encoder,
+        )
     else:
         assert 'agent is not supported: %s' % args.agent
 
@@ -389,7 +417,7 @@ def make_env(args, mode='train', **kwargs):
     if args.encoder_type == 'identity':
         assert args.agent in ['sac_ae'], 'If you use state, please use `sac_ae` agent.'
 
-    if args.agent in ['sac_ae', 'sac_drq']:
+    if args.agent in ['sac_ae', 'sac_drq', 'sac_lsf']:
         env_args.update(
             height=args.image_size,
             width=args.image_size,
@@ -427,7 +455,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
             batch_size=args.batch_size,
             device=device
         )
-    elif args.agent in ['sac_aux']:
+    elif args.agent in ['sac_aux', 'sac_lsf']:
         return utils.LSFReplayBuffer(
             obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
