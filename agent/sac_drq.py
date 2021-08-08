@@ -400,3 +400,10 @@ class SacDrqAgent(object):
         if step % self.critic_target_update_frequency == 0:
             utils.soft_update_params(self.critic, self.critic_target,
                                      self.critic_tau)
+
+    def save(self, model_dir, step):
+        return
+
+    def load(self, model_dir, step):
+        return
+
