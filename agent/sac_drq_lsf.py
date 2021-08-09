@@ -209,7 +209,7 @@ class SacLSFAgent(object):
                  obs_shape,
                  action_shape,
                  device,
-                 hidden_dim=1024,
+                 hidden_dim=256,
                  discount=0.99,
                  init_temperature=0.01,
                  alpha_lr=1e-3,
@@ -250,7 +250,8 @@ class SacLSFAgent(object):
 
         self.dynamic_hidden_dim = 50
         self.aug_trans = nn.Sequential(
-            kornia.augmentation.CenterCrop((self.image_size, self.image_size))
+            nn.ReplicationPad2d(4),
+            kornia.augmentation.RandomCrop((self.image_size, self.image_size))
         )
 
         self.actor = Actor(
@@ -341,6 +342,9 @@ class SacLSFAgent(object):
             return a
 
     def sample_action(self, obs):
+        if obs.shape[-1] != self.image_size:
+            obs = utils.center_crop_image(obs, self.image_size)
+
         with torch.no_grad():
             a = self.act(obs, sample=True)
             return a
