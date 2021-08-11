@@ -373,6 +373,7 @@ def make_agent(obs_shape, action_shape, args, device):
             encoder_type=args.encoder_type,
             encoder_feature_dim=args.encoder_feature_dim,
             encoder_lr=args.encoder_lr,
+            decoder_lr=args.decoder_lr,
             encoder_tau=args.encoder_tau,
             num_layers=args.num_layers,
             num_filters=args.num_filters,
@@ -611,10 +612,17 @@ def main():
 
         # run training update
         if step >= args.init_steps:
+            # if step == args.init_steps:
+            #     for _ in range(args.init_steps):
+            #         agent.update_dynamics(replay_buffer, L, step)
+            # else:
             num_updates = args.n_grad_updates
-
-            for _ in range(num_updates):
+            for i in range(num_updates):
                 agent.update(replay_buffer, L, step)
+                # if i == 0:
+                #     agent.update(replay_buffer, L, step)
+                # else:
+                #     agent.update_lsf(replay_buffer, L, step)
 
         next_obs, reward, done, next_extra = env.step(action)
 

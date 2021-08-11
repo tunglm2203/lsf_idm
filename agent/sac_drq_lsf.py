@@ -230,7 +230,6 @@ class SacLSFAgent(object):
                  encoder_tau=0.005,
                  num_layers=4,
                  num_filters=32,
-                 cpc_update_freq=1,
                  log_interval=100,
                  detach_encoder=False,):
         self.device = device
@@ -239,7 +238,6 @@ class SacLSFAgent(object):
         self.encoder_tau = encoder_tau
         self.actor_update_freq = actor_update_freq
         self.critic_target_update_freq = critic_target_update_freq
-        self.cpc_update_freq = cpc_update_freq
         self.log_interval = log_interval
         self.image_size = obs_shape[-1]
         self.detach_encoder = detach_encoder
@@ -248,10 +246,13 @@ class SacLSFAgent(object):
         self.actor_update_frequency = 2
         self.critic_target_update_frequency = 2
 
-        self.dynamic_hidden_dim = 50
+        self.dynamic_hidden_dim = 256
         self.aug_trans = nn.Sequential(
             nn.ReplicationPad2d(4),
             kornia.augmentation.RandomCrop((self.image_size, self.image_size))
+        )
+        self.center_crop = nn.Sequential(
+            kornia.augmentation.CenterCrop((self.image_size, self.image_size))
         )
 
         self.actor = Actor(
@@ -273,7 +274,9 @@ class SacLSFAgent(object):
             nn.Linear(encoder_feature_dim, self.dynamic_hidden_dim),
             nn.LayerNorm(self.dynamic_hidden_dim),
             nn.ReLU(),
-            nn.Linear(self.dynamic_hidden_dim, 1)).to(device)
+            nn.Linear(self.dynamic_hidden_dim, 1),
+            nn.Tanh()
+        ).to(device)
 
         self.inverse_model = nn.Sequential(
             nn.Linear(encoder_feature_dim * 2, self.dynamic_hidden_dim),
@@ -281,7 +284,7 @@ class SacLSFAgent(object):
             nn.ReLU(),
             nn.Linear(self.dynamic_hidden_dim, action_shape[0]),
             nn.Tanh()
-        )
+        ).to(device)
 
         self.critic_target.load_state_dict(self.critic.state_dict())
 
@@ -350,7 +353,7 @@ class SacLSFAgent(object):
             return a
 
     def update_critic(self, obs, obs_aug, action, reward, next_obs,
-                      next_obs_aug, not_done, logger, step, post_fix=''):
+                      next_obs_aug, not_done, logger, step, post_fix='', detach_encoder=False):
         with torch.no_grad():
             dist = self.actor(next_obs)
             next_action = dist.rsample()
@@ -373,11 +376,11 @@ class SacLSFAgent(object):
             target_Q = (target_Q + target_Q_aug) / 2
 
         # get current Q estimates
-        current_Q1, current_Q2 = self.critic(obs, action)
+        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=detach_encoder)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
             current_Q2, target_Q)
 
-        Q1_aug, Q2_aug = self.critic(obs_aug, action)
+        Q1_aug, Q2_aug = self.critic(obs_aug, action, detach_encoder=detach_encoder)
 
         critic_loss += F.mse_loss(Q1_aug, target_Q) + F.mse_loss(
             Q2_aug, target_Q)
@@ -422,9 +425,10 @@ class SacLSFAgent(object):
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
 
-    def update_inverse_reward_model(self, obs, action, reward, next_obs, not_done, logger, step):
-        z = self.critic.encoder(obs)
-        z_next = self.critic.encoder(next_obs)
+    def update_inverse_reward_model(self, obs, action, reward, next_obs, not_done, logger, step,
+                                    detach_encoder=False):
+        z = self.critic.encoder(obs, detach=detach_encoder)
+        z_next = self.critic.encoder(next_obs, detach=detach_encoder)
 
         z_cat = torch.cat((z, z_next), axis=1)
         pred_act = self.inverse_model(z_cat)
@@ -457,7 +461,7 @@ class SacLSFAgent(object):
         self.update_critic(obs, obs_aug, action, reward, next_obs,
                            next_obs_aug, not_done, logger, step)
 
-        # self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
+        self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
 
         if step % self.actor_update_frequency == 0:
             self.update_actor_and_alpha(obs, logger, step)
@@ -477,8 +481,8 @@ class SacLSFAgent(object):
         next_obs_aug = self.aug_trans(sf_next_obses)
 
         with torch.no_grad():
-            obses_cen =  utils.center_crop_image(sf_obses, self.image_size)
-            next_obses_cen = utils.center_crop_image(sf_obses, self.image_size)
+            obses_cen =  self.center_crop(sf_obses)
+            next_obses_cen = self.center_crop(sf_obses)
 
             z = self.critic.encoder(obses_cen).detach()
             z_next = self.critic.encoder(next_obses_cen).detach()
@@ -493,14 +497,19 @@ class SacLSFAgent(object):
         self.update_critic(obs, obs_aug, action, reward, next_obs,
                            next_obs_aug, not_done, logger, step, post_fix='_lsf')
 
-        self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
-
         if step % self.actor_update_frequency == 0:
             self.update_actor_and_alpha(obs, logger, step, post_fix='_lsf')
 
         if step % self.critic_target_update_frequency == 0:
             utils.soft_update_params(self.critic, self.critic_target,
                                      self.critic_tau)
+
+    def update_dynamics(self, replay_buffer, logger, step):
+        obs_, action, reward, next_obs_, _, not_done, _ = replay_buffer.sample()
+        obs = self.aug_trans(obs_)
+        next_obs = self.aug_trans(next_obs_)
+
+        self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
 
     def save(self, model_dir, step):
         return
