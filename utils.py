@@ -385,14 +385,16 @@ class LSFReplayBuffer(object):
         self.last_save = 0
 
         # Scope for skipped frames buffer
-        self.sf_capacity = capacity
+        self.sf_capacity = capacity * action_repeat
         self.ar = action_repeat
 
         self.sf_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
         self.sf_next_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
+        self.sf_rewards = np.empty((self.sf_capacity, 1), dtype=np.float32)
 
         self.sf_idx = 0
         self.sf_full = False
+        self.last_reward = None
 
     def add(self, obs, action, reward, next_obs, done, done_no_max, extra, next_extra, first_step):
         np.copyto(self.obses[self.idx], obs)
@@ -403,13 +405,31 @@ class LSFReplayBuffer(object):
         np.copyto(self.not_dones_no_max[self.idx], not done_no_max)
 
         if not first_step:
+            assert len(extra['skipped_obses']) == self.ar - 1
+            assert len(extra['intermediate_rewards']) == self.ar - 1
+
+            # Calculate individual reward at every skipped frames
+            skipped_rewards = []
+            for k in range(1, self.ar - 1):
+                skipped_rewards.append(extra['intermediate_rewards'][k])
+            rew_at_decision_point = self.last_reward - sum(skipped_rewards)
+            skipped_rewards.append(rew_at_decision_point)
+            for k in range(self.ar - 1):
+                skipped_rewards.append(next_extra['intermediate_rewards'][k])
+
+            assert len(skipped_rewards) == self.ar * 2 - 2
+            assert (np.array(skipped_rewards) >= 0.0).all()
+
             for offset_sf in range(self.ar - 1):
+                sf_reward = sum(skipped_rewards[offset_sf:offset_sf + self.ar])
                 np.copyto(self.sf_obses[self.sf_idx], extra['skipped_obses'][offset_sf])
                 np.copyto(self.sf_next_obses[self.sf_idx], next_extra['skipped_obses'][offset_sf])
+                np.copyto(self.sf_rewards[self.sf_idx], sf_reward)
 
                 self.sf_idx = (self.sf_idx + 1) % self.sf_capacity
                 self.sf_full = self.sf_full or self.sf_idx == 0
 
+        self.last_reward = reward if not done else None
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
@@ -424,7 +444,8 @@ class LSFReplayBuffer(object):
 
         sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
         sf_next_obses = torch.as_tensor(self.sf_next_obses[sf_idxs], device=self.device).float()
-        extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses)
+        sf_rewards = torch.as_tensor(self.sf_rewards[sf_idxs], device=self.device)
+        extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses, sf_rewards=sf_rewards)
 
         if only_extra:
             return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, extra
