@@ -243,9 +243,6 @@ class SacLSFAgent(object):
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
 
-        self.actor_update_frequency = 2
-        self.critic_target_update_frequency = 2
-
         self.dynamic_hidden_dim = 256
         self.aug_trans = nn.Sequential(
             nn.ReplicationPad2d(4),
@@ -275,7 +272,6 @@ class SacLSFAgent(object):
             nn.LayerNorm(self.dynamic_hidden_dim),
             nn.ReLU(),
             nn.Linear(self.dynamic_hidden_dim, 1),
-            nn.Tanh()
         ).to(device)
 
         self.inverse_model = nn.Sequential(
@@ -325,6 +321,8 @@ class SacLSFAgent(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
+        self.reward_decoder.train(training)
+        self.inverse_model.train(training)
 
     @property
     def alpha(self):
@@ -355,35 +353,32 @@ class SacLSFAgent(object):
     def update_critic(self, obs, obs_aug, action, reward, next_obs,
                       next_obs_aug, not_done, logger, step, post_fix='', detach_encoder=False):
         with torch.no_grad():
+            # First augmentation
             dist = self.actor(next_obs)
             next_action = dist.rsample()
             log_prob = dist.log_prob(next_action).sum(-1, keepdim=True)
+
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
-            target_V = torch.min(target_Q1,
-                                 target_Q2) - self.alpha.detach() * log_prob
+            target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_prob
             target_Q = reward + (not_done * self.discount * target_V)
 
+            # Second augmentation
             dist_aug = self.actor(next_obs_aug)
             next_action_aug = dist_aug.rsample()
-            log_prob_aug = dist_aug.log_prob(next_action_aug).sum(-1,
-                                                                  keepdim=True)
-            target_Q1, target_Q2 = self.critic_target(next_obs_aug,
-                                                      next_action_aug)
-            target_V = torch.min(
-                target_Q1, target_Q2) - self.alpha.detach() * log_prob_aug
+            log_prob_aug = dist_aug.log_prob(next_action_aug).sum(-1, keepdim=True)
+
+            target_Q1, target_Q2 = self.critic_target(next_obs_aug, next_action_aug)
+            target_V = torch.min(target_Q1, target_Q2) - self.alpha.detach() * log_prob_aug
             target_Q_aug = reward + (not_done * self.discount * target_V)
 
             target_Q = (target_Q + target_Q_aug) / 2
 
         # get current Q estimates
         current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=detach_encoder)
-        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
-            current_Q2, target_Q)
+        critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
         Q1_aug, Q2_aug = self.critic(obs_aug, action, detach_encoder=detach_encoder)
-
-        critic_loss += F.mse_loss(Q1_aug, target_Q) + F.mse_loss(
-            Q2_aug, target_Q)
+        critic_loss += F.mse_loss(Q1_aug, target_Q) + F.mse_loss(Q2_aug, target_Q)
 
         logger.log('train_critic/loss' + post_fix, critic_loss, step)
 
@@ -456,17 +451,18 @@ class SacLSFAgent(object):
         next_obs = self.aug_trans(next_obs_)
         next_obs_aug = self.aug_trans(next_obs_)
 
-        logger.log('train/batch_reward', reward.mean(), step)
+        if step % self.log_interval == 0:
+            logger.log('train/batch_reward', reward.mean(), step)
 
         self.update_critic(obs, obs_aug, action, reward, next_obs,
                            next_obs_aug, not_done, logger, step)
 
         self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
 
-        if step % self.actor_update_frequency == 0:
+        if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, logger, step)
 
-        if step % self.critic_target_update_frequency == 0:
+        if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(self.critic, self.critic_target,
                                      self.critic_tau)
 
@@ -495,12 +491,13 @@ class SacLSFAgent(object):
         logger.log('train/batch_reward_lsf', reward.mean(), step)
 
         self.update_critic(obs, obs_aug, action, reward, next_obs,
-                           next_obs_aug, not_done, logger, step, post_fix='_lsf')
+                           next_obs_aug, not_done, logger, step, post_fix='_lsf',
+                           detach_encoder=True)
 
-        if step % self.actor_update_frequency == 0:
+        if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, logger, step, post_fix='_lsf')
 
-        if step % self.critic_target_update_frequency == 0:
+        if step % self.critic_target_update_freq == 0:
             utils.soft_update_params(self.critic, self.critic_target,
                                      self.critic_tau)
 
