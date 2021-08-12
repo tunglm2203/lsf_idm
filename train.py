@@ -24,6 +24,7 @@ from agent.sac_cpm import SacCPMAgent
 from agent.sac_drq import SacDrqAgent
 from agent.sac_aux import SacAuxAgent
 from agent.sac_drq_lsf import SacLSFAgent
+from agent.sac_rad_lsf import SacRadLSFAgent
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -124,7 +125,7 @@ def parse_args():
 def evaluate(env, agent, video, num_episodes, L, step, args):
 
     def preprocess_obs(obs):
-        if args.agent in ['sac_curl', 'sac_cpm', 'sac_aux']:
+        if args.agent in ['sac_curl', 'sac_cpm', 'sac_aux', 'sac_rad_lsf']:
             preprocessed = utils.center_crop_image(obs, args.image_size)  # Preprocess input for CURL
         elif args.agent in ['sac_rad']:
             # center crop image
@@ -380,6 +381,35 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
         )
+    elif args.agent in ['sac_rad_lsf']:
+        return SacRadLSFAgent(
+            obs_shape=obs_shape,
+            action_shape=action_shape,
+            device=device,
+            hidden_dim=args.hidden_dim,
+            discount=args.discount,
+            init_temperature=args.init_temperature,
+            alpha_lr=args.alpha_lr,
+            alpha_beta=args.alpha_beta,
+            actor_lr=args.actor_lr,
+            actor_beta=args.actor_beta,
+            actor_log_std_min=args.actor_log_std_min,
+            actor_log_std_max=args.actor_log_std_max,
+            actor_update_freq=args.actor_update_freq,
+            critic_lr=args.critic_lr,
+            critic_beta=args.critic_beta,
+            critic_tau=args.critic_tau,
+            critic_target_update_freq=args.critic_target_update_freq,
+            encoder_type=args.encoder_type,
+            encoder_feature_dim=args.encoder_feature_dim,
+            encoder_lr=args.encoder_lr,
+            decoder_lr=args.decoder_lr,
+            encoder_tau=args.encoder_tau,
+            num_layers=args.num_layers,
+            num_filters=args.num_filters,
+            log_interval=args.log_interval,
+            detach_encoder=args.detach_encoder,
+        )
     else:
         assert 'agent is not supported: %s' % args.agent
 
@@ -423,7 +453,7 @@ def make_env(args, mode='train', **kwargs):
             height=args.image_size,
             width=args.image_size,
         )
-    elif args.agent in ['sac_curl', 'sac_cpm', 'sac_aux']:
+    elif args.agent in ['sac_curl', 'sac_cpm', 'sac_aux', 'sac_rad_lsf']:
         env_args.update(
             height=args.pre_transform_image_size,
             width=args.pre_transform_image_size,
@@ -456,7 +486,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
             batch_size=args.batch_size,
             device=device
         )
-    elif args.agent in ['sac_aux', 'sac_lsf']:
+    elif args.agent in ['sac_aux', 'sac_lsf', 'sac_rad_lsf']:
         return utils.LSFReplayBuffer(
             obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
