@@ -478,7 +478,7 @@ class SacLSFAgent(object):
 
         with torch.no_grad():
             obses_cen =  self.center_crop(sf_obses)
-            next_obses_cen = self.center_crop(sf_obses)
+            next_obses_cen = self.center_crop(sf_next_obses)
 
             z = self.critic.encoder(obses_cen).detach()
             z_next = self.critic.encoder(next_obses_cen).detach()
