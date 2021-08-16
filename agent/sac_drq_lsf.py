@@ -262,17 +262,18 @@ class SacLSFAgent(object):
             obs_shape, action_shape, hidden_dim, encoder_type,
             encoder_feature_dim, num_layers, num_filters
         ).to(device)
+
         self.critic_target = Critic(
             obs_shape, action_shape, hidden_dim, encoder_type,
             encoder_feature_dim, num_layers, num_filters
         ).to(device)
 
-        self.reward_decoder = nn.Sequential(
-            nn.Linear(encoder_feature_dim, self.dynamic_hidden_dim),
-            nn.LayerNorm(self.dynamic_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(self.dynamic_hidden_dim, 1),
-        ).to(device)
+        # self.reward_decoder = nn.Sequential(
+        #     nn.Linear(encoder_feature_dim, self.dynamic_hidden_dim),
+        #     nn.LayerNorm(self.dynamic_hidden_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(self.dynamic_hidden_dim, 1),
+        # ).to(device)
 
         self.inverse_model = nn.Sequential(
             nn.Linear(encoder_feature_dim * 2, self.dynamic_hidden_dim),
@@ -284,13 +285,13 @@ class SacLSFAgent(object):
 
         self.critic_target.load_state_dict(self.critic.state_dict())
 
-        # tie conv layers between actor and critic
+        # tie encoders between actor and critic, and CURL and critic
         self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
         self.log_alpha.requires_grad = True
         # set target entropy to -|A|
-        self.target_entropy = -action_shape[0]
+        self.target_entropy = -np.prod(action_shape)
 
         # optimizers
         self.actor_optimizer = torch.optim.Adam(
@@ -298,7 +299,8 @@ class SacLSFAgent(object):
         )
 
         self.critic_optimizer = torch.optim.Adam(
-            self.critic.parameters(), lr=critic_lr, betas=(critic_beta, 0.999))
+            self.critic.parameters(), lr=critic_lr, betas=(critic_beta, 0.999)
+        )
 
         self.log_alpha_optimizer = torch.optim.Adam(
             [self.log_alpha], lr=alpha_lr, betas=(alpha_beta, 0.999)
@@ -310,7 +312,7 @@ class SacLSFAgent(object):
 
         decoder_weight_lambda = 0.0000001
         self.decoder_optimizer = torch.optim.Adam(
-            list(self.reward_decoder.parameters()) + list(self.inverse_model.parameters()),
+            self.inverse_model.parameters(),
             lr=decoder_lr
         )
 
@@ -321,7 +323,7 @@ class SacLSFAgent(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
-        self.reward_decoder.train(training)
+        # self.reward_decoder.train(training)
         self.inverse_model.train(training)
 
     @property
@@ -429,10 +431,11 @@ class SacLSFAgent(object):
         pred_act = self.inverse_model(z_cat)
         inv_model_loss = F.mse_loss(pred_act, action)
 
-        pred_rew = self.reward_decoder(z_next)
-        reward_loss = F.mse_loss(pred_rew, reward)
+        # pred_rew = self.reward_decoder(z_next)
+        # reward_loss = F.mse_loss(pred_rew, reward)
 
-        total_loss = inv_model_loss + reward_loss
+        # total_loss = inv_model_loss + reward_loss
+        total_loss = inv_model_loss
 
         self.encoder_optimizer.zero_grad()
         self.decoder_optimizer.zero_grad()
@@ -442,7 +445,7 @@ class SacLSFAgent(object):
 
         if step % self.log_interval == 0:
             logger.log('train/idm_loss', inv_model_loss, step)
-            logger.log('train/reward_loss', reward_loss, step)
+            # logger.log('train/reward_loss', reward_loss, step)
 
     def update(self, replay_buffer, logger, step):
         obs_, action, reward, next_obs_, _, not_done, _ = replay_buffer.sample()
@@ -466,9 +469,11 @@ class SacLSFAgent(object):
             utils.soft_update_params(self.critic, self.critic_target,
                                      self.critic_tau)
 
-    def update_lsf(self, replay_buffer, logger, step):
+    def update_use_sf(self, replay_buffer, logger, step):
         _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
         sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+        assert sf_obses.shape[2] == 84
+        reward = extra['sf_rewards']
         not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
 
         obs = self.aug_trans(sf_obses)
@@ -486,13 +491,12 @@ class SacLSFAgent(object):
             z_cat = torch.cat((z, z_next), axis=1)
             action = self.inverse_model(z_cat).detach()
 
-            reward = self.reward_decoder(z_next).detach()
 
-        logger.log('train/batch_reward_lsf', reward.mean(), step)
+        if step % self.log_interval == 0:
+            logger.log('train/batch_reward_lsf', reward.mean(), step)
 
         self.update_critic(obs, obs_aug, action, reward, next_obs,
-                           next_obs_aug, not_done, logger, step, post_fix='_lsf',
-                           detach_encoder=True)
+                           next_obs_aug, not_done, logger, step, post_fix='_lsf')
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, logger, step, post_fix='_lsf')
@@ -501,7 +505,45 @@ class SacLSFAgent(object):
             utils.soft_update_params(self.critic, self.critic_target,
                                      self.critic_tau)
 
-    def update_dynamics(self, replay_buffer, logger, step):
+    def update_critic_use_sf(self, replay_buffer, logger, step):
+        _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
+        sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+        assert sf_obses.shape[2] == 84
+        reward = extra['sf_rewards']
+        not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+
+        obs = self.aug_trans(sf_obses)
+        obs_aug = self.aug_trans(sf_obses)
+        next_obs = self.aug_trans(sf_next_obses)
+        next_obs_aug = self.aug_trans(sf_next_obses)
+
+        with torch.no_grad():
+            obses_cen = self.center_crop(sf_obses)
+            next_obses_cen = self.center_crop(sf_next_obses)
+
+            z = self.critic.encoder(obses_cen).detach()
+            z_next = self.critic.encoder(next_obses_cen).detach()
+
+            z_cat = torch.cat((z, z_next), axis=1)
+            action = self.inverse_model(z_cat).detach()
+
+        if step % self.log_interval == 0:
+            logger.log('train/batch_reward_lsf', reward.mean(), step)
+
+        self.update_critic(obs, obs_aug, action, reward, next_obs,
+                           next_obs_aug, not_done, logger, step, post_fix='_lsf')
+
+    def update_critic_use_original_data(self, replay_buffer, logger, step):
+        obs_, action, reward, next_obs_, _, not_done, _ = replay_buffer.sample()
+        obs = self.aug_trans(obs_)
+        obs_aug = self.aug_trans(obs_)
+        next_obs = self.aug_trans(next_obs_)
+        next_obs_aug = self.aug_trans(next_obs_)
+
+        self.update_critic(obs, obs_aug, action, reward, next_obs,
+                           next_obs_aug, not_done, logger, step)
+
+    def update_dynamics_only(self, replay_buffer, logger, step):
         obs_, action, reward, next_obs_, _, not_done, _ = replay_buffer.sample()
         obs = self.aug_trans(obs_)
         next_obs = self.aug_trans(next_obs_)
@@ -509,7 +551,17 @@ class SacLSFAgent(object):
         self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
 
     def save(self, model_dir, step):
-        return
+        torch.save(
+            self.actor.state_dict(), '%s/actor_%s.pt' % (model_dir, step)
+        )
+        torch.save(
+            self.critic.state_dict(), '%s/critic_%s.pt' % (model_dir, step)
+        )
 
     def load(self, model_dir, step):
-        return
+        self.actor.load_state_dict(
+            torch.load('%s/actor_%s.pt' % (model_dir, step))
+        )
+        self.critic.load_state_dict(
+            torch.load('%s/critic_%s.pt' % (model_dir, step))
+        )
