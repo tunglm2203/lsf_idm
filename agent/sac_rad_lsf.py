@@ -249,12 +249,12 @@ class SacRadLSFAgent(object):
             encoder_feature_dim, num_layers, num_filters
         ).to(device)
 
-        self.reward_decoder = nn.Sequential(
-            nn.Linear(encoder_feature_dim, self.dynamic_hidden_dim),
-            nn.LayerNorm(self.dynamic_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(self.dynamic_hidden_dim, 1),
-        ).to(device)
+        # self.reward_decoder = nn.Sequential(
+        #     nn.Linear(encoder_feature_dim, self.dynamic_hidden_dim),
+        #     nn.LayerNorm(self.dynamic_hidden_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(self.dynamic_hidden_dim, 1),
+        # ).to(device)
 
         self.inverse_model = nn.Sequential(
             nn.Linear(encoder_feature_dim * 2, self.dynamic_hidden_dim),
@@ -293,7 +293,7 @@ class SacRadLSFAgent(object):
 
         decoder_weight_lambda = 0.0000001
         self.decoder_optimizer = torch.optim.Adam(
-            list(self.reward_decoder.parameters()) + list(self.inverse_model.parameters()),
+            self.inverse_model.parameters(),
             lr=decoder_lr
         )
 
@@ -304,7 +304,7 @@ class SacRadLSFAgent(object):
         self.training = training
         self.actor.train(training)
         self.critic.train(training)
-        self.reward_decoder.train(training)
+        # self.reward_decoder.train(training)
         self.inverse_model.train(training)
 
     @property
@@ -330,7 +330,8 @@ class SacRadLSFAgent(object):
             mu, pi, _, _ = self.actor(obs, compute_log_pi=False)
             return pi.cpu().data.numpy().flatten()
 
-    def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
+    def update_critic(self, obs, action, reward, next_obs, not_done, L, step,
+                      post_fix='', detach_encoder=False):
         with torch.no_grad():
             _, policy_action, log_pi, _ = self.actor(next_obs)
 
@@ -339,11 +340,11 @@ class SacRadLSFAgent(object):
             target_Q = reward + (not_done * self.discount * target_V)
 
         # get current Q estimates
-        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
+        current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=detach_encoder)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
         if step % self.log_interval == 0:
-            L.log('train_critic/loss', critic_loss, step)
+            L.log('train_critic/loss' + post_fix, critic_loss, step)
 
         # Optimize the critic
         self.critic_optimizer.zero_grad()
@@ -352,7 +353,7 @@ class SacRadLSFAgent(object):
 
         self.critic.log(L, step)
 
-    def update_actor_and_alpha(self, obs, L, step):
+    def update_actor_and_alpha(self, obs, L, step, post_fix=''):
         # detach encoder, so we don't update it with the actor loss
         _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True)
         actor_Q1, actor_Q2 = self.critic(obs, pi, detach_encoder=True)
@@ -361,12 +362,12 @@ class SacRadLSFAgent(object):
         actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
 
         if step % self.log_interval == 0:
-            L.log('train_actor/loss', actor_loss, step)
-            L.log('train_actor/target_entropy', self.target_entropy, step)
+            L.log('train_actor/loss' + post_fix, actor_loss, step)
+            L.log('train_actor/target_entropy' + post_fix, self.target_entropy, step)
         entropy = 0.5 * log_std.shape[1] * \
                   (1.0 + np.log(2 * np.pi)) + log_std.sum(dim=-1)
         if step % self.log_interval == 0:
-            L.log('train_actor/entropy', entropy.mean(), step)
+            L.log('train_actor/entropy' + post_fix, entropy.mean(), step)
 
         # optimize the actor
         self.actor_optimizer.zero_grad()
@@ -379,8 +380,8 @@ class SacRadLSFAgent(object):
         alpha_loss = (self.alpha *
                       (-log_pi - self.target_entropy).detach()).mean()
         if step % self.log_interval == 0:
-            L.log('train_alpha/loss', alpha_loss, step)
-            L.log('train_alpha/value', self.alpha, step)
+            L.log('train_alpha/loss' + post_fix, alpha_loss, step)
+            L.log('train_alpha/value' + post_fix, self.alpha, step)
         alpha_loss.backward()
         self.log_alpha_optimizer.step()
 
@@ -393,10 +394,11 @@ class SacRadLSFAgent(object):
         pred_act = self.inverse_model(z_cat)
         inv_model_loss = F.mse_loss(pred_act, action)
 
-        pred_rew = self.reward_decoder(z_next)
-        reward_loss = F.mse_loss(pred_rew, reward)
+        # pred_rew = self.reward_decoder(z_next)
+        # reward_loss = F.mse_loss(pred_rew, reward)
 
-        total_loss = inv_model_loss + reward_loss
+        # total_loss = inv_model_loss + reward_loss
+        total_loss = inv_model_loss
 
         self.encoder_optimizer.zero_grad()
         self.decoder_optimizer.zero_grad()
@@ -406,19 +408,20 @@ class SacRadLSFAgent(object):
 
         if step % self.log_interval == 0:
             logger.log('train/idm_loss', inv_model_loss, step)
-            logger.log('train/reward_loss', reward_loss, step)
+            # logger.log('train/reward_loss', reward_loss, step)
 
     def update(self, replay_buffer, L, step):
         obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
+        assert obs.shape[2] == 100
         obs = self.aug_trans(obs)
         next_obs = self.aug_trans(next_obs)
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
-        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step, self.detach_encoder)
 
-        # self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
+        self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)
@@ -434,6 +437,89 @@ class SacRadLSFAgent(object):
                 self.critic.encoder, self.critic_target.encoder,
                 self.encoder_tau
             )
+
+    def update_use_sf(self, replay_buffer, L, step):
+        _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
+        sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+        assert sf_obses.shape[2] == 100
+        reward = extra['sf_rewards']
+        not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+
+        obs = self.aug_trans(sf_obses)
+        next_obs = self.aug_trans(sf_next_obses)
+
+        with torch.no_grad():
+            obses_cen =  self.center_crop(sf_obses)
+            next_obses_cen = self.center_crop(sf_next_obses)
+
+            z = self.critic.encoder(obses_cen)
+            z_next = self.critic.encoder(next_obses_cen)
+
+            z_cat = torch.cat((z, z_next), axis=1)
+            action = self.inverse_model(z_cat).detach()
+
+        if step % self.log_interval == 0:
+            L.log('train/batch_reward', reward.mean(), step)
+
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step,
+                           post_fix='_lsf', detach_encoder=self.detach_encoder)
+
+        if step % self.actor_update_freq == 0:
+            self.update_actor_and_alpha(obs, L, step, post_fix='_lsf')
+
+        if step % self.critic_target_update_freq == 0:
+            utils.soft_update_params(
+                self.critic.Q1, self.critic_target.Q1, self.critic_tau
+            )
+            utils.soft_update_params(
+                self.critic.Q2, self.critic_target.Q2, self.critic_tau
+            )
+            utils.soft_update_params(
+                self.critic.encoder, self.critic_target.encoder,
+                self.encoder_tau
+            )
+
+    def update_critic_use_sf(self, replay_buffer, L, step):
+        _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
+        sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+        assert sf_obses.shape[2] == 100
+        reward = extra['sf_rewards']
+        not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+
+        obs = self.aug_trans(sf_obses)
+        next_obs = self.aug_trans(sf_next_obses)
+
+        with torch.no_grad():
+            obses_cen =  self.center_crop(sf_obses)
+            next_obses_cen = self.center_crop(sf_next_obses)
+
+            z = self.critic.encoder(obses_cen)
+            z_next = self.critic.encoder(next_obses_cen)
+
+            z_cat = torch.cat((z, z_next), axis=1)
+            action = self.inverse_model(z_cat).detach()
+
+        if step % self.log_interval == 0:
+            L.log('train/batch_reward_lsf', reward.mean(), step)
+
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+
+    def update_critic_use_original_data(self, replay_buffer, L, step):
+        obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
+        assert obs.shape[2] == 100
+
+        obs = self.aug_trans(obs)
+        next_obs = self.aug_trans(next_obs)
+
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+
+
+    def update_dynamics_only(self, replay_buffer, logger, step):
+        obs_, action, reward, next_obs_, _, not_done, _ = replay_buffer.sample()
+        obs = self.aug_trans(obs_)
+        next_obs = self.aug_trans(next_obs_)
+
+        self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, logger, step)
 
     def save(self, model_dir, step):
         torch.save(
