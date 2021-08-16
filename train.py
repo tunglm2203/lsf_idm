@@ -352,7 +352,7 @@ def make_agent(obs_shape, action_shape, args, device):
             detach_mlp=args.detach_mlp,
             share_mlp_ac=args.share_mlp_ac,
         )
-    elif args.agent in ['sac_lsf']:
+    elif args.agent in ['sac_drq_lsf']:
         return SacLSFAgent(
             obs_shape=obs_shape,
             action_shape=action_shape,
@@ -448,7 +448,7 @@ def make_env(args, mode='train', **kwargs):
     if args.encoder_type == 'identity':
         assert args.agent in ['sac_ae'], 'If you use state, please use `sac_ae` agent.'
 
-    if args.agent in ['sac_ae', 'sac_drq', 'sac_lsf']:
+    if args.agent in ['sac_ae', 'sac_drq', 'sac_drq_lsf']:
         env_args.update(
             height=args.image_size,
             width=args.image_size,
@@ -486,7 +486,7 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
             batch_size=args.batch_size,
             device=device
         )
-    elif args.agent in ['sac_aux', 'sac_lsf', 'sac_rad_lsf']:
+    elif args.agent in ['sac_aux', 'sac_drq_lsf', 'sac_rad_lsf']:
         return utils.LSFReplayBuffer(
             obs_shape=pre_aug_obs_shape,
             action_shape=env.action_space.shape,
@@ -642,17 +642,17 @@ def main():
 
         # run training update
         if step >= args.init_steps:
-            # if step == args.init_steps:
-            #     for _ in range(args.init_steps):
-            #         agent.update_dynamics(replay_buffer, L, step)
-            # else:
-            num_updates = args.n_grad_updates
-            for i in range(num_updates):
-                agent.update(replay_buffer, L, step)
-                # if i == 0:
-                #     agent.update(replay_buffer, L, step)
-                # else:
-                #     agent.update_lsf(replay_buffer, L, step)
+            if step == args.init_steps:
+                for _ in range(args.init_steps):
+                    agent.update_dynamics_only(replay_buffer, L, step)
+            else:
+                num_updates = args.n_grad_updates
+                for i in range(num_updates):
+                    agent.update(replay_buffer, L, step)
+                    for _ in range(args.action_repeat - 1):
+                        # agent.update_critic_use_sf(replay_buffer, L, step)
+                        agent.update_critic_use_original_data(replay_buffer, L, step)
+
 
         next_obs, reward, done, next_extra = env.step(action)
 
