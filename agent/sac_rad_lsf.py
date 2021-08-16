@@ -419,7 +419,7 @@ class SacRadLSFAgent(object):
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
-        self.update_critic(obs, action, reward, next_obs, not_done, L, step, self.detach_encoder)
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
 
         self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
 
@@ -462,7 +462,7 @@ class SacRadLSFAgent(object):
             L.log('train/batch_reward', reward.mean(), step)
 
         self.update_critic(obs, action, reward, next_obs, not_done, L, step,
-                           post_fix='_lsf', detach_encoder=self.detach_encoder)
+                           post_fix='_lsf')
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step, post_fix='_lsf')
