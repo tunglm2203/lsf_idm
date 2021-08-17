@@ -433,13 +433,17 @@ class LSFReplayBuffer(object):
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
-    def sample(self, only_extra=False):
+    def sample(self, only_extra=False, batch_size=None):
         obses, actions, rewards, next_obses = None, None, None, None
         not_dones, not_dones_no_max = None, None
 
         # Sampling from auxiliary buffer
+        if batch_size is None:
+            sampled_bs = self.batch_size
+        else:
+            sampled_bs = batch_size
         sf_idxs = np.random.randint(
-            0, self.sf_capacity if self.sf_full else self.sf_idx, size=self.batch_size
+            0, self.sf_capacity if self.sf_full else self.sf_idx, size=sampled_bs
         )
 
         sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
@@ -452,7 +456,7 @@ class LSFReplayBuffer(object):
 
         # Sampling from main buffer
         idxs = np.random.randint(
-            0, self.capacity if self.full else self.idx, size=self.batch_size
+            0, self.capacity if self.full else self.idx, size=sampled_bs
         )
 
         obses = torch.as_tensor(self.obses[idxs], device=self.device).float()

@@ -409,6 +409,8 @@ def make_agent(obs_shape, action_shape, args, device):
             num_filters=args.num_filters,
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
+            batch_size=args.batch_size,
+            action_repeat=args.action_repeat
         )
     else:
         assert 'agent is not supported: %s' % args.agent
@@ -648,10 +650,11 @@ def main():
             else:
                 num_updates = args.n_grad_updates
                 for i in range(num_updates):
-                    agent.update(replay_buffer, L, step)
-                    for _ in range(args.action_repeat - 1):
-                        # agent.update_critic_use_sf(replay_buffer, L, step)
-                        agent.update_critic_use_original_data(replay_buffer, L, step)
+                    agent.update(replay_buffer, L, step, use_lsf=True)
+                    # for _ in range(args.action_repeat - 1):
+                    #     assert num_updates == 1
+                    #     agent.update_critic_use_sf(replay_buffer, L, step)
+                    #     agent.update_critic_use_original_data(replay_buffer, L, step)
 
 
         next_obs, reward, done, next_extra = env.step(action)

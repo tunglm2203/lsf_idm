@@ -211,7 +211,10 @@ class SacRadLSFAgent(object):
             num_layers=4,
             num_filters=32,
             log_interval=100,
-            detach_encoder=False,):
+            detach_encoder=False,
+            batch_size=None,
+            action_repeat=1
+    ):
         self.device = device
         self.discount = discount
         self.critic_tau = critic_tau
@@ -222,6 +225,8 @@ class SacRadLSFAgent(object):
         self.image_size = obs_shape[-1]
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
+        self.batch_size = batch_size
+        self.action_repeat = action_repeat
 
         self.augs_funcs = {}
 
@@ -410,16 +415,50 @@ class SacRadLSFAgent(object):
             logger.log('train/idm_loss', inv_model_loss, step)
             # logger.log('train/reward_loss', reward_loss, step)
 
-    def update(self, replay_buffer, L, step):
-        obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
+    def update(self, replay_buffer, L, step, use_lsf=False):
+        obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample(batch_size=self.batch_size)
+
+        import pdb; pdb.set_trace()
+        if use_lsf:
+            _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True,
+                                                           batch_size=int(self.batch_size * (self.action_repeat - 1)))
+            sf_obses, sf_next_obses, sf_reward = extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards']
+            assert sf_obses.shape[2] == 100
+            sf_not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+
+            with torch.no_grad():
+                obses_cen = self.center_crop(sf_obses)
+                next_obses_cen = self.center_crop(sf_next_obses)
+
+                z = self.critic.encoder(obses_cen)
+                z_next = self.critic.encoder(next_obses_cen)
+
+                z_cat = torch.cat((z, z_next), axis=1)
+                sf_action = self.inverse_model(z_cat).detach()
+            obs_ex, action_ex, reward_ex, next_obs_ex, not_done_ex = \
+                sf_obses, sf_action, sf_reward, sf_next_obses, sf_not_done
+        else:
+            obs_ex, action_ex, reward_ex, next_obs_ex, _, not_done_ex, _ = replay_buffer.sample(
+                batch_size=int(self.batch_size * (self.action_repeat - 1)))
+
+        # Data for Q-training
+        obs_q = torch.cat((obs, obs_ex))
+        next_obs_q = torch.cat((next_obs, next_obs_ex))
+        reward_q = torch.cat((reward, reward_ex))
+        action_q = torch.cat((action, action_ex))
+        not_done_q = torch.cat((not_done, not_done_ex))
+
         assert obs.shape[2] == 100
-        obs = self.aug_trans(obs)
-        next_obs = self.aug_trans(next_obs)
+        obs_q = self.aug_trans(obs_q)
+        next_obs_q = self.aug_trans(next_obs_q)
+        obs = obs_q[:self.batch_size, :, :, :]
+        next_obs = next_obs_q[:self.batch_size, :, :, :]
 
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
-        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+        # self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+        self.update_critic(obs_q, action_q, reward_q, next_obs_q, not_done_q, L, step)
 
         self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
 
