@@ -416,12 +416,41 @@ class SacRadLSFAgent(object):
             # logger.log('train/reward_loss', reward_loss, step)
 
     def update(self, replay_buffer, L, step, use_lsf=False):
+        obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
+        assert obs.shape[2] == 100
+
+        obs = self.aug_trans(obs)
+        next_obs = self.aug_trans(next_obs)
+
+        if step % self.log_interval == 0:
+            L.log('train/batch_reward', reward.mean(), step)
+
+        if use_lsf:
+            self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
+
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+
+        if step % self.actor_update_freq == 0:
+            self.update_actor_and_alpha(obs, L, step)
+
+        if step % self.critic_target_update_freq == 0:
+            utils.soft_update_params(
+                self.critic.Q1, self.critic_target.Q1, self.critic_tau
+            )
+            utils.soft_update_params(
+                self.critic.Q2, self.critic_target.Q2, self.critic_tau
+            )
+            utils.soft_update_params(
+                self.critic.encoder, self.critic_target.encoder,
+                self.encoder_tau
+            )
+
+    def update_v1(self, replay_buffer, L, step, use_lsf=False, n_repeats=3):
         obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample(batch_size=self.batch_size)
 
-        import pdb; pdb.set_trace()
         if use_lsf:
             _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True,
-                                                           batch_size=int(self.batch_size * (self.action_repeat - 1)))
+                                                           batch_size=int(self.batch_size * (n_repeats - 1)))
             sf_obses, sf_next_obses, sf_reward = extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards']
             assert sf_obses.shape[2] == 100
             sf_not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
@@ -439,7 +468,7 @@ class SacRadLSFAgent(object):
                 sf_obses, sf_action, sf_reward, sf_next_obses, sf_not_done
         else:
             obs_ex, action_ex, reward_ex, next_obs_ex, _, not_done_ex, _ = replay_buffer.sample(
-                batch_size=int(self.batch_size * (self.action_repeat - 1)))
+                batch_size=int(self.batch_size * (n_repeats - 1)))
 
         # Data for Q-training
         obs_q = torch.cat((obs, obs_ex))
@@ -457,10 +486,11 @@ class SacRadLSFAgent(object):
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
 
+        if use_lsf:
+            self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
+
         # self.update_critic(obs, action, reward, next_obs, not_done, L, step)
         self.update_critic(obs_q, action_q, reward_q, next_obs_q, not_done_q, L, step)
-
-        self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
 
         if step % self.actor_update_freq == 0:
             self.update_actor_and_alpha(obs, L, step)
@@ -479,10 +509,10 @@ class SacRadLSFAgent(object):
 
     def update_use_sf(self, replay_buffer, L, step):
         _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
-        sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+        sf_obses, sf_next_obses, sf_reward = extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards']
         assert sf_obses.shape[2] == 100
-        reward = extra['sf_rewards']
         not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+        reward = sf_reward
 
         obs = self.aug_trans(sf_obses)
         next_obs = self.aug_trans(sf_next_obses)
@@ -520,10 +550,10 @@ class SacRadLSFAgent(object):
 
     def update_critic_use_sf(self, replay_buffer, L, step):
         _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
-        sf_obses, sf_next_obses = extra['sf_obses'], extra['sf_next_obses']
+        sf_obses, sf_next_obses, sf_reward = extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards']
         assert sf_obses.shape[2] == 100
-        reward = extra['sf_rewards']
         not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+        reward = sf_reward
 
         obs = self.aug_trans(sf_obses)
         next_obs = self.aug_trans(sf_next_obses)
