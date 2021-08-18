@@ -213,7 +213,8 @@ class SacRadLSFAgent(object):
             log_interval=100,
             detach_encoder=False,
             batch_size=None,
-            action_repeat=1
+            action_repeat=1,
+            use_aug=True
     ):
         self.device = device
         self.discount = discount
@@ -231,9 +232,14 @@ class SacRadLSFAgent(object):
         self.augs_funcs = {}
 
         self.dynamic_hidden_dim = 256
-        self.aug_trans = nn.Sequential(
-            kornia.augmentation.RandomCrop((self.image_size, self.image_size))
-        )
+        if use_aug:
+            self.aug_trans = nn.Sequential(
+                kornia.augmentation.RandomCrop((self.image_size, self.image_size))
+            )
+        else:
+            self.aug_trans = nn.Sequential(
+                kornia.augmentation.CenterCrop((self.image_size, self.image_size))
+            )
         self.center_crop = nn.Sequential(
             kornia.augmentation.CenterCrop((self.image_size, self.image_size))
         )

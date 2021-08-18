@@ -54,6 +54,7 @@ def parse_args():
     # Leveraging skipped frames (LSF)
     parser.add_argument('--n_extra_update_cri', default=1, type=int)
     parser.add_argument('--use_lsf', type=str2bool, default=False)
+    parser.add_argument('--use_aug', type=str2bool, default=True)
 
     # Linearized FDM
     parser.add_argument('--fdm_lr', default=1e-3, type=float)
@@ -412,7 +413,8 @@ def make_agent(obs_shape, action_shape, args, device):
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
             batch_size=args.batch_size,
-            action_repeat=args.action_repeat
+            action_repeat=args.action_repeat,
+            use_aug=args.use_aug
         )
     else:
         assert 'agent is not supported: %s' % args.agent
