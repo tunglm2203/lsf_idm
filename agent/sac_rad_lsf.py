@@ -421,18 +421,24 @@ class SacRadLSFAgent(object):
             logger.log('train/idm_loss', inv_model_loss, step)
             # logger.log('train/reward_loss', reward_loss, step)
 
-    def update(self, replay_buffer, L, step, use_lsf=False):
+    def update(self, replay_buffer, L, step, use_lsf=False, n_inv_updates=1):
         obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
         assert obs.shape[2] == 100
 
         obs = self.aug_trans(obs)
         next_obs = self.aug_trans(next_obs)
 
+        if use_lsf:
+            for i in range(n_inv_updates):
+                if i > 0:
+                    obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
+
+                    obs = self.aug_trans(obs)
+                    next_obs = self.aug_trans(next_obs)
+                self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
+
         if step % self.log_interval == 0:
             L.log('train/batch_reward', reward.mean(), step)
-
-        if use_lsf:
-            self.update_inverse_reward_model(obs, action, reward, next_obs, not_done, L, step)
 
         self.update_critic(obs, action, reward, next_obs, not_done, L, step)
 

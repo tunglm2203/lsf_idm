@@ -55,6 +55,7 @@ def parse_args():
     parser.add_argument('--n_extra_update_cri', default=1, type=int)
     parser.add_argument('--use_lsf', type=str2bool, default=False)
     parser.add_argument('--use_aug', type=str2bool, default=True)
+    parser.add_argument('--n_inv_updates', default=2, type=int)
 
     # Linearized FDM
     parser.add_argument('--fdm_lr', default=1e-3, type=float)
@@ -655,7 +656,8 @@ def main():
             else:
                 # num_updates = args.n_grad_updates
                 # for i in range(num_updates):
-                agent.update(replay_buffer, L, step, use_lsf=args.use_lsf)
+                agent.update(replay_buffer, L, step, use_lsf=args.use_lsf,
+                             n_inv_updates=args.n_inv_updates)
                 for _ in range(args.n_extra_update_cri):
                     if args.use_lsf:
                         agent.update_critic_use_sf(replay_buffer, L, step)
