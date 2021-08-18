@@ -52,7 +52,9 @@ def parse_args():
     parser.add_argument('--idm_update_freq', default=1, type=int)
     parser.add_argument('--cpm_noaug', action='store_true', default=False)
     # Leveraging skipped frames (LSF)
-    parser.add_argument('--n_enc_updates', default=1, type=int)
+    parser.add_argument('--n_extra_update_cri', default=1, type=int)
+    parser.add_argument('--use_lsf', type=str2bool, default=False)
+
     # Linearized FDM
     parser.add_argument('--fdm_lr', default=1e-3, type=float)
     parser.add_argument('--fdm_arch', default='linear', type=str)
@@ -645,16 +647,18 @@ def main():
         # run training update
         if step >= args.init_steps:
             if step == args.init_steps:
-                for _ in range(args.init_steps):
-                    agent.update_dynamics_only(replay_buffer, L, step)
+                if args.use_lsf:
+                    for _ in range(args.init_steps):
+                        agent.update_dynamics_only(replay_buffer, L, step)
             else:
-                num_updates = args.n_grad_updates
-                for i in range(num_updates):
-                    agent.update(replay_buffer, L, step, use_lsf=True)
-                    # for _ in range(args.action_repeat - 1):
-                    #     assert num_updates == 1
-                    #     agent.update_critic_use_sf(replay_buffer, L, step)
-                    #     agent.update_critic_use_original_data(replay_buffer, L, step)
+                # num_updates = args.n_grad_updates
+                # for i in range(num_updates):
+                agent.update(replay_buffer, L, step, use_lsf=args.use_lsf)
+                for _ in range(args.n_extra_update_cri):
+                    if args.use_lsf:
+                        agent.update_critic_use_sf(replay_buffer, L, step)
+                    else:
+                        agent.update_critic_use_original_data(replay_buffer, L, step)
 
 
         next_obs, reward, done, next_extra = env.step(action)
