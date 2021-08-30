@@ -29,7 +29,7 @@ from agent.sac_rad_lsf import SacRadLSFAgent
 def parse_args():
     parser = argparse.ArgumentParser()
     # environment
-    parser.add_argument('--benchmark', default='planet', type=str, choices=['dreamer', 'planet'])
+    parser.add_argument('--benchmark', default='planet', type=str, choices=['dreamer', 'planet', 'ours'])
     parser.add_argument('--domain_name', default='cheetah')
     parser.add_argument('--task_name', default='run')
     parser.add_argument('--image_size', default=84, type=int)
@@ -422,15 +422,21 @@ def make_agent(obs_shape, action_shape, args, device):
 
 
 def make_env(args, mode='train', **kwargs):
-    ar_planet_benchmark=dict(
+    ar_planet_benchmark = dict(
         cartpole=8, cheetah=4, ball_in_cup=4, reacher=4, walker=2, finger=2,
         hopper=4, pendulum=4
     )
+    ours_benchmark = dict(
+        reach_duplo=2,
+    )
+    episode_length = 250 if args.benchmark == 'ours' else 1000
     if args.encoder_type == 'pixel' and args.action_repeat == -1:
         if args.benchmark == 'planet':
             args.__dict__["action_repeat"] = ar_planet_benchmark[args.domain_name]
-        elif args.benchark == 'dreamer':
+        elif args.benchmark == 'dreamer':
             args.__dict__["action_repeat"] = 2
+        elif args.benchmark == 'ours':
+            args.__dict__["action_repeat"] = ours_benchmark[args.task_name]
     elif args.encoder_type == 'identity':
         args.__dict__["action_repeat"] = 1
 
@@ -450,6 +456,7 @@ def make_env(args, mode='train', **kwargs):
         default_background=not args.rand_bg,
         default_camera=not args.rand_cam,
         default_color=not args.rand_color,
+        episode_length=episode_length
     )
 
     if args.encoder_type == 'identity':
@@ -663,6 +670,8 @@ def main():
                         agent.update_critic_use_sf(replay_buffer, L, step)
                     else:
                         agent.update_critic_use_original_data(replay_buffer, L, step)
+            # agent.update(replay_buffer, L, step, use_lsf=args.use_lsf,
+            #              n_inv_updates=args.n_inv_updates)
 
 
         next_obs, reward, done, next_extra = env.step(action)
