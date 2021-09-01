@@ -274,6 +274,7 @@ class SacRadLSFAgent(object):
             nn.Linear(self.dynamic_hidden_dim, action_shape[0]),
             nn.Tanh()
         ).to(device)
+        self.inverse_model.apply(weight_init)
 
         self.critic_target.load_state_dict(self.critic.state_dict())
 
@@ -585,6 +586,20 @@ class SacRadLSFAgent(object):
 
         self.update_critic(obs, action, reward, next_obs, not_done, L, step)
 
+    def update_critic_use_sf_previous_method(self, replay_buffer, L, step):
+        _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
+        sf_obses, sf_next_obses, sf_reward, sf_action = \
+            extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards'], extra['extra']
+        assert sf_obses.shape[2] == 100
+        not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
+        reward = sf_reward
+        action = sf_action
+
+        obs = self.aug_trans(sf_obses)
+        next_obs = self.aug_trans(sf_next_obses)
+
+        self.update_critic(obs, action, reward, next_obs, not_done, L, step)
+
     def update_critic_use_original_data(self, replay_buffer, L, step):
         obs, action, reward, next_obs, _, not_done, _ = replay_buffer.sample()
         assert obs.shape[2] == 100
@@ -593,7 +608,6 @@ class SacRadLSFAgent(object):
         next_obs = self.aug_trans(next_obs)
 
         self.update_critic(obs, action, reward, next_obs, not_done, L, step)
-
 
     def update_dynamics_only(self, replay_buffer, logger, step):
         obs_, action, reward, next_obs_, _, not_done, _ = replay_buffer.sample()
