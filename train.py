@@ -507,7 +507,8 @@ def make_replaybuffer(args, env, device=torch.device('cpu')):
             capacity=args.replay_buffer_capacity,
             batch_size=args.batch_size,
             device=device,
-            action_repeat=args.action_repeat
+            action_repeat=args.action_repeat,
+            use_lsf=args.use_lsf
         )
     elif args.agent in ['sac_curl', 'sac_cpm']:
         return utils.CurlReplayBuffer(
@@ -656,6 +657,7 @@ def main():
 
         # run training update
         if step >= args.init_steps:
+            # TODO: our method
             if step == args.init_steps:
                 if args.use_lsf:
                     for _ in range(args.init_steps):
@@ -670,8 +672,14 @@ def main():
                         agent.update_critic_use_sf(replay_buffer, L, step)
                     else:
                         agent.update_critic_use_original_data(replay_buffer, L, step)
+            # TODO: for ablation
             # agent.update(replay_buffer, L, step, use_lsf=args.use_lsf,
             #              n_inv_updates=args.n_inv_updates)
+            # TODO: previous method
+            # agent.update(replay_buffer, L, step, use_lsf=args.use_lsf,
+            #              n_inv_updates=args.n_inv_updates)
+            # for _ in range(args.n_extra_update_cri):
+            #     agent.update_critic_use_sf_previous_method(replay_buffer, L, step)
 
 
         next_obs, reward, done, next_extra = env.step(action)

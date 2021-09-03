@@ -589,7 +589,7 @@ class SacRadLSFAgent(object):
     def update_critic_use_sf_previous_method(self, replay_buffer, L, step):
         _, _, _, _, _, _, extra = replay_buffer.sample(only_extra=True)
         sf_obses, sf_next_obses, sf_reward, sf_action = \
-            extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards'], extra['extra']
+            extra['sf_obses'], extra['sf_next_obses'], extra['sf_rewards'], extra['sf_actions']
         assert sf_obses.shape[2] == 100
         not_done = torch.ones((sf_obses.shape[0], 1), device=self.device).float()
         reward = sf_reward

@@ -365,10 +365,11 @@ class ReplayBuffer(object):
 class LSFReplayBuffer(object):
     """Buffer to store environment transitions."""
     def __init__(self, obs_shape, action_shape, capacity, batch_size, device,
-                 action_repeat):
+                 action_repeat, use_lsf=True):
         self.capacity = capacity
         self.batch_size = batch_size
         self.device = device
+        self.use_lsf = use_lsf
 
         # the proprioceptive obs is stored as float32, pixels obs as uint8
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
@@ -388,14 +389,15 @@ class LSFReplayBuffer(object):
         self.sf_capacity = capacity * action_repeat
         self.ar = action_repeat
 
-        self.sf_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
-        self.sf_next_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
-        self.sf_rewards = np.empty((self.sf_capacity, 1), dtype=np.float32)
-        self.sf_actions = np.empty((self.sf_capacity, *action_shape), dtype=np.float32)
+        if use_lsf:
+            self.sf_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
+            self.sf_next_obses = np.empty((self.sf_capacity, *obs_shape), dtype=obs_dtype)
+            self.sf_rewards = np.empty((self.sf_capacity, 1), dtype=np.float32)
+            self.sf_actions = np.empty((self.sf_capacity, *action_shape), dtype=np.float32)
 
-        self.sf_idx = 0
-        self.sf_full = False
-        self.last_reward = None
+            self.sf_idx = 0
+            self.sf_full = False
+            self.last_reward = None
 
     def add(self, obs, action, reward, next_obs, done, done_no_max, extra, next_extra, first_step):
         np.copyto(self.obses[self.idx], obs)
@@ -408,59 +410,63 @@ class LSFReplayBuffer(object):
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
-        if not first_step:
-            assert len(extra['skipped_obses']) == self.ar - 1
-            assert len(extra['intermediate_rewards']) == self.ar - 1
+        if self.use_lsf:
+            if not first_step:
+                assert len(extra['skipped_obses']) == self.ar - 1
+                assert len(extra['intermediate_rewards']) == self.ar - 1
 
-            # Calculate individual reward at every skipped frames
-            skipped_rewards = []
-            skipped_actions = np.concatenate(
-                (np.repeat(extra['skipped_acts'][0][None, :], self.ar - 1, axis=0),
-                 np.repeat(next_extra['skipped_acts'][0][None, :], self.ar - 1, axis=0)),
-                axis=0
-            )
-            skipped_rewards.extend(extra['intermediate_rewards'][1:self.ar - 1])
-            rew_at_decision_point = self.last_reward - sum(extra['intermediate_rewards'])
-            skipped_rewards.append(rew_at_decision_point)
-            skipped_rewards.extend(next_extra['intermediate_rewards'])
+                # Calculate individual reward at every skipped frames
+                skipped_rewards = []
+                skipped_actions = np.concatenate(
+                    (np.repeat(extra['skipped_acts'][0][None, :], self.ar - 1, axis=0),
+                     np.repeat(next_extra['skipped_acts'][0][None, :], self.ar - 1, axis=0)),
+                    axis=0
+                )
+                skipped_rewards.extend(extra['intermediate_rewards'][1:self.ar - 1])
+                rew_at_decision_point = self.last_reward - sum(extra['intermediate_rewards'])
+                skipped_rewards.append(rew_at_decision_point)
+                skipped_rewards.extend(next_extra['intermediate_rewards'])
 
-            assert len(skipped_rewards) == self.ar * 2 - 2
-            assert (np.array(skipped_rewards) >= 0.0).all()
+                assert len(skipped_rewards) == self.ar * 2 - 2
+                assert (np.array(skipped_rewards) >= 0.0).all()
 
-            for k in range(self.ar - 1):
-                sf_reward = sum(skipped_rewards[k:k + self.ar])
-                np.copyto(self.sf_obses[self.sf_idx], extra['skipped_obses'][k])
-                np.copyto(self.sf_next_obses[self.sf_idx], next_extra['skipped_obses'][k])
-                np.copyto(self.sf_rewards[self.sf_idx], sf_reward)
-                np.copyto(self.sf_actions[self.sf_idx], skipped_actions[k:k + self.ar, :].mean(0))
+                for k in range(self.ar - 1):
+                    sf_reward = sum(skipped_rewards[k:k + self.ar])
+                    np.copyto(self.sf_obses[self.sf_idx], extra['skipped_obses'][k])
+                    np.copyto(self.sf_next_obses[self.sf_idx], next_extra['skipped_obses'][k])
+                    np.copyto(self.sf_rewards[self.sf_idx], sf_reward)
+                    np.copyto(self.sf_actions[self.sf_idx], skipped_actions[k:k + self.ar, :].mean(0))
 
-                self.sf_idx = (self.sf_idx + 1) % self.sf_capacity
-                self.sf_full = self.sf_full or self.sf_idx == 0
+                    self.sf_idx = (self.sf_idx + 1) % self.sf_capacity
+                    self.sf_full = self.sf_full or self.sf_idx == 0
 
-        self.last_reward = reward if not done else None
+            self.last_reward = reward if not done else None
 
     def sample(self, only_extra=False, batch_size=None):
         obses, actions, rewards, next_obses = None, None, None, None
         not_dones, not_dones_no_max = None, None
+        extra = None
 
         # Sampling from auxiliary buffer
         if batch_size is None:
             sampled_bs = self.batch_size
         else:
             sampled_bs = batch_size
-        sf_idxs = np.random.randint(
-            0, self.sf_capacity if self.sf_full else self.sf_idx, size=sampled_bs
-        )
 
-        sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
-        sf_next_obses = torch.as_tensor(self.sf_next_obses[sf_idxs], device=self.device).float()
-        sf_rewards = torch.as_tensor(self.sf_rewards[sf_idxs], device=self.device)
-        sf_actions = torch.as_tensor(self.sf_actions[sf_idxs], device=self.device)
-        extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses,
-                     sf_rewards=sf_rewards, sf_actions=sf_actions)
+        if self.use_lsf:
+            sf_idxs = np.random.randint(
+                0, self.sf_capacity if self.sf_full else self.sf_idx, size=sampled_bs
+            )
 
-        if only_extra:
-            return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, extra
+            sf_obses = torch.as_tensor(self.sf_obses[sf_idxs], device=self.device).float()
+            sf_next_obses = torch.as_tensor(self.sf_next_obses[sf_idxs], device=self.device).float()
+            sf_rewards = torch.as_tensor(self.sf_rewards[sf_idxs], device=self.device)
+            sf_actions = torch.as_tensor(self.sf_actions[sf_idxs], device=self.device)
+            extra = dict(sf_obses=sf_obses, sf_next_obses=sf_next_obses,
+                         sf_rewards=sf_rewards, sf_actions=sf_actions)
+
+            if only_extra:
+                return obses, actions, rewards, next_obses, not_dones, not_dones_no_max, extra
 
         # Sampling from main buffer
         idxs = np.random.randint(
