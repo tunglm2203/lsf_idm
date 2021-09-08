@@ -119,8 +119,8 @@ def get_values_with_range(xs, ys, truncate):
     for k in range(n_experiments):
         found_idxes = np.argwhere(xs[k] >= truncate)
         if len(found_idxes) == 0:
-            print("[WARNING] Last index is {}, consider choose smaller range in {}".format(
-                xs[k][-1], directories[i]))
+            print("[WARNING] Last index is {}, consider choose smaller range".format(
+                xs[k][-1]))
             _xs.append(xs[k][:])
             _ys.append(ys[k][:])
         else:
