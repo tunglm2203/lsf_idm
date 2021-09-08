@@ -19,3 +19,5 @@ plot_dmc_v1.py
 train_dbc.py
 frn.py
 scripts/*
+
+figures/
