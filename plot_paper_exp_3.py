@@ -121,10 +121,12 @@ def plot_multiple_results(directories):
     env_titles = dict(
         cartpole_swingup='Cartpole-swingup',
         cheetah_run='Cheetah-run',
+        ball_in_cup_catch='Ball_in_cup-catch',
     )
     plot_xlabels = dict(
         cartpole_swingup=r'Environment steps ($\times 1e6$)',
         cheetah_run=r'Environment steps ($\times 1e6$)',
+        ball_in_cup_catch=r'Environment steps ($\times 1e6$)',
     )
     plt.title(env_titles[args.env])
     plt.xlabel(plot_xlabels[args.env])
@@ -165,6 +167,14 @@ if __name__ == '__main__':
             'logs/cheetah-run/sac_lsf_rad_ablation_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_0_extraupd_1_n_invupd_1_aug_0_ar2/',
             'logs/cheetah-run/sac_lsf_rad_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_0_extraupd_1_n_invupd_1_aug_0/',
             'logs/cheetah-run/sac_lsf_rad_ablation_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_0_extraupd_1_n_invupd_1_aug_0_ar8/',
+        ],
+        ball_in_cup_catch=[
+            'logs/ball_in_cup-catch/sac_lsf_rad_ablation_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_1_extraupd_1_n_invupd_1_aug_0_alpha0.5_ar2/',
+            's159_logs/ball_in_cup-catch/sac_lsf_rad_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_1_extraupd_1_n_invupd_1_aug_0_alpha0.5/',
+            'logs/ball_in_cup-catch/sac_lsf_rad_ablation_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_1_extraupd_1_n_invupd_1_aug_0_alpha0.5_ar8/',
+            's131_logs/ball_in_cup-catch/sac_lsf_rad_ablation_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_0_extraupd_1_n_invupd_1_aug_0_alpha0.5_ar2/',
+            's159_logs/ball_in_cup-catch/sac_pixel/',
+            's131_logs/ball_in_cup-catch/sac_lsf_rad_ablation_1000init_1gs_aclr1e-4_clr1e-4_allr1e-4_elr1e-4_ac_freq2_2_enccri_tau0.05_0.01_declr1e-4_bs128_baseline_extra_upd_critic_uselsf_0_extraupd_1_n_invupd_1_aug_0_alpha0.5_ar8/',
         ],
     )
     env_ranges = dict(
