@@ -23,6 +23,7 @@ parser.add_argument('--drq_dir', type=str, default='/home/tung/workspace/rlbench
 parser.add_argument('--plot_drq', action='store_true')
 parser.add_argument('--slac_dir', type=str, default='/home/tung/workspace/rlbench/slac/')
 parser.add_argument('--plot_slac', action='store_true')
+parser.add_argument('--plot_dreamer', action='store_true')
 
 args = parser.parse_args()
 
@@ -145,6 +146,8 @@ def plot_multiple_results(directories):
         plot_drq_results()
     if args.plot_slac:
         plot_slac_results()
+    if args.plot_dreamer:
+        plot_dreamer_results()
 
     # Plot data.
     for i in range(len(collect_data)):
@@ -188,7 +191,9 @@ def plot_multiple_results(directories):
     if args.plot_drq:
         legend_name.insert(0, 'DrQ')
     if args.plot_slac:
-        legend_name.insert(1, 'SLAC')
+        legend_name.insert(0, 'SLAC')
+    if args.plot_dreamer:
+        legend_name.insert(0, 'Dreamer')
 
     plt.legend(legend_name, loc='best', fontsize=10)
     plt.show()
@@ -215,6 +220,37 @@ def plot_drq_results():
         ys.append(y_concat[start:end])
 
     # Plotting
+    if args.range != -1:
+        xs, ys = get_values_with_range(xs, ys, args.range)
+    xs, ys = pad(xs), pad(ys)
+    assert xs.shape == ys.shape
+
+    usex = xs[0]
+    ymean = np.nanmean(ys, axis=0)
+    ystd = np.nanstd(ys, axis=0)
+
+    ystderr = ystd / np.sqrt(len(ys))
+    plt.plot(usex, ymean, label='config')
+    if args.shaded_err:
+        plt.fill_between(usex, ymean - ystderr, ymean + ystderr, alpha=0.4)
+    if args.shaded_std:
+        plt.fill_between(usex, ymean - ystd, ymean + ystd, alpha=0.2)
+
+def plot_dreamer_results():
+    import pathlib
+    xaxis = 'step'
+    yaxis = 'test/return'
+    # Read data from .json file
+    res_path = 'dreamer/20200203T170524_dmc_dreamer'
+    res_path = os.path.join(res_path, 'dmc_' + args.env)
+    indir = pathlib.Path(res_path)
+    xs, ys = [], []
+    for filename in indir.glob('**/*.jsonl'):
+        with filename.open() as f:
+            df = pd.DataFrame([json.loads(l) for l in f.readlines()])
+            df = df[[xaxis, yaxis]].dropna()
+            xs.append(df[xaxis].to_numpy())
+            ys.append(df[yaxis].to_numpy())
     if args.range != -1:
         xs, ys = get_values_with_range(xs, ys, args.range)
     xs, ys = pad(xs), pad(ys)
