@@ -19,6 +19,15 @@ conda env create -f conda_env.yml
 
 Quick start: `bash scripts/cartpole/run.sh`
 
+## Acknowledgement
+
+This code is implemented on top of [SAC Pytorch](https://github.com/denisyarats/pytorch_sac).
+
+This work was supported in part by the Institute for Information & communications Technology Promotion (IITP) grant funded by the
+Korea government (MSIT) (No. 2021-0-01381, Development of Causal AI through Video Understanding) and in part by the Institute of
+Information & communications Technology Planning & Evaluation (IITP) grant funded by the Korea government (MSIT) (2022-0-00951,
+Development of Uncertainty-Aware Agents Learning by Asking Questions).
+
 
 ## BibTex
 
