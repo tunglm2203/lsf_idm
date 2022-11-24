@@ -1,79 +1,47 @@
-# SAC+AE implementation in PyTorch
+# Utilizing Skipped Frames in Action Repeats for Improving Sample Efficiency in Reinforcement Learning 
 
-This is PyTorch implementation of SAC+AE from
 
-**Improving Sample Efficiency in Model-Free Reinforcement Learning from Images** by
+##  Description:
 
-[Denis Yarats](https://cs.nyu.edu/~dy1042/), [Amy Zhang](https://mila.quebec/en/person/amy-zhang/), [Ilya Kostrikov](https://github.com/ikostrikov), [Brandon Amos](http://bamos.github.io/), [Joelle Pineau](https://www.cs.mcgill.ca/~jpineau/), [Rob Fergus](https://cs.nyu.edu/~fergus/pmwiki/pmwiki.php).
+This repository implements the paper "Utilizing Skipped Frames in Action Repeats for Improving Sample Efficiency in 
+Reinforcement Learning".
 
-[[Paper]](https://arxiv.org/abs/1910.01741) [[Webpage]](https://sites.google.com/view/sac-ae/home)
 
-## Citation
-If you use this repo in your research, please consider citing the paper as follows
-```
-@article{yarats2019improving,
-    title={Improving Sample Efficiency in Model-Free Reinforcement Learning from Images},
-    author={Denis Yarats and Amy Zhang and Ilya Kostrikov and Brandon Amos and Joelle Pineau and Rob Fergus},
-    year={2019},
-    eprint={1910.01741},
-    archivePrefix={arXiv}
-}
-```
+## Installation
 
-## Requirements
-We assume you have access to a gpu that can run CUDA 9.2. Then, the simplest way to install all required dependencies is to create an anaconda environment by running:
+All of the dependencies are in the `conda_env.yml` file. They can be installed manually or with the following command:
+
 ```
 conda env create -f conda_env.yml
 ```
-After the instalation ends you can activate your environment with:
+
+## Instructions:
+
+Quick start: `bash scripts/cartpole/run.sh`
+
+## Acknowledgement
+
+This code is implemented on top of [SAC Pytorch](https://github.com/denisyarats/pytorch_sac).
+
+This work was supported in part by the Institute for Information & communications Technology Promotion (IITP) grant funded by the
+Korea government (MSIT) (No. 2021-0-01381, Development of Causal AI through Video Understanding) and in part by the Institute of
+Information & communications Technology Planning & Evaluation (IITP) grant funded by the Korea government (MSIT) (2022-0-00951,
+Development of Uncertainty-Aware Agents Learning by Asking Questions).
+
+
+## BibTex
+
 ```
-source activate pytorch_sac_ae
+@ARTICLE{9793636,
+  author={Luu, Tung M. and Nguyen, Thanh and Vu, Thang and Yoo, Chang D.},
+  journal={IEEE Access}, 
+  title={Utilizing Skipped Frames in Action Repeats for Improving Sample Efficiency in Reinforcement Learning}, 
+  year={2022},
+  volume={10},
+  number={},
+  pages={64965-64975},
+  doi={10.1109/ACCESS.2022.3182107}
+  }
 ```
 
-## Instructions
-To train an SAC+AE agent on the `cheetah run` task from image-based observations  run:
-```
-python train.py \
-    --domain_name cheetah \
-    --task_name run \
-    --encoder_type pixel \
-    --decoder_type pixel \
-    --action_repeat 4 \
-    --save_video \
-    --save_tb \
-    --work_dir ./log \
-    --seed 1
-```
-This will produce 'log' folder, where all the outputs are going to be stored including train/eval logs, tensorboard blobs, and evaluation episode videos. One can attacha tensorboard to monitor training by running:
-```
-tensorboard --logdir log
-```
-and opening up tensorboad in your browser.
 
-The console output is also available in a form:
-```
-| train | E: 1 | S: 1000 | D: 0.8 s | R: 0.0000 | BR: 0.0000 | ALOSS: 0.0000 | CLOSS: 0.0000 | RLOSS: 0.0000
-```
-a training entry decodes as:
-```
-train - training episode
-E - total number of episodes 
-S - total number of environment steps
-D - duration in seconds to train 1 episode
-R - episode reward
-BR - average reward of sampled batch
-ALOSS - average loss of actor
-CLOSS - average loss of critic
-RLOSS - average reconstruction loss (only if is trained from pixels and decoder)
-```
-while an evaluation entry:
-```
-| eval | S: 0 | ER: 21.1676
-```
-which just tells the expected reward `ER` evaluating current policy after `S` steps. Note that `ER` is average evaluation performance over `num_eval_episodes` episodes (usually 10).
-
-## Results
-Our method demonstrates significantly improved performance over the baseline SAC:pixel. It matches the state-of-the-art performance of model-based algorithms, such as PlaNet (Hafner et al., 2018) and SLAC (Lee et al., 2019), as well
-as a model-free algorithm D4PG (Barth-Maron et al., 2018), that also learns from raw images. Our
-algorithm exhibits stable learning across ten random seeds and is extremely easy to implement.
-![Results](results/graph.png)
