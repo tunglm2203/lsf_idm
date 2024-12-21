@@ -1,7 +1,7 @@
 # Utilizing Skipped Frames in Action Repeats for Improving Sample Efficiency in Reinforcement Learning 
 
 
-##  Description:
+##  Description
 
 This repository implements the paper "Utilizing Skipped Frames in Action Repeats for Improving Sample Efficiency in 
 Reinforcement Learning".
@@ -15,9 +15,13 @@ All of the dependencies are in the `conda_env.yml` file. They can be installed m
 conda env create -f conda_env.yml
 ```
 
-## Instructions:
+## Instructions
 
 Quick start: `bash scripts/cartpole/run.sh`
+
+## Related Work
+
+Hindsight Goal Ranking (https://github.com/tunglm2203/hgr)
 
 ## Acknowledgement
 
